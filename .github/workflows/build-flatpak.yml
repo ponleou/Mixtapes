@@ -23,6 +23,11 @@ jobs:
         if: matrix.arch == 'aarch64'
         uses: docker/setup-qemu-action@v3
 
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+
       - name: Build using Flatpak Builder
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:

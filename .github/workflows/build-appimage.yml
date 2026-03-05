@@ -36,8 +36,8 @@ jobs:
           cp com.pocoguy.Muse.desktop AppDir/usr/share/applications/
           cp assets/icons/hicolor/scalable/actions/compass2-symbolic.svg AppDir/usr/share/icons/hicolor/scalable/apps/com.pocoguy.Muse.svg
           glib-compile-resources --sourcedir=. src/muse.gresource.xml --target=AppDir/usr/share/muse/src/muse.gresource
-          pip3 install -r requirements.txt --prefix=AppDir/usr --no-cache-dir
-          pip3 install "yt-dlp[default]" --prefix=AppDir/usr --no-cache-dir
+          sudo pip3 install -r requirements.txt --prefix=AppDir/usr --no-cache-dir --break-system-packages
+          sudo pip3 install "yt-dlp[default]" --prefix=AppDir/usr --no-cache-dir --break-system-packages
 
           # Create launcher
           cat > AppDir/usr/bin/muse << 'EOF'
