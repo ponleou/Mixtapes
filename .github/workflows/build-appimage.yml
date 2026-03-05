@@ -57,7 +57,7 @@ jobs:
         run: |
           sed -i 's/x86_64/aarch64/g' AppImageBuilder.yml
           sed -i 's/amd64/arm64/g' AppImageBuilder.yml
-          sed -i 's/archive.ubuntu.com/ports.ubuntu.com/g' AppImageBuilder.yml
+          sed -i 's|http://archive.ubuntu.com/ubuntu/|http://ports.ubuntu.com/ubuntu-ports/|g' AppImageBuilder.yml
 
       - name: Setup multiarch apt
         if: matrix.arch == 'aarch64'

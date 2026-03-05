@@ -188,6 +188,15 @@ Automated builds for both Flatpak and AppImage are available for every change ma
 
 **For Flatpak:**
 
+You can quickly add the automated repository to receive updates by running:
+
+```bash
+flatpak remote-add --user --if-not-exists mixtapes https://m-obeid.github.io/Muse/
+flatpak install --user mixtapes com.pocoguy.Muse
+```
+
+_(Alternatively, you can download the offline bundle file:)_
+
 ```bash
 unzip Mixtapes-x86_64-flatpak.zip
 flatpak install --user ./Mixtapes-x86_64.flatpak

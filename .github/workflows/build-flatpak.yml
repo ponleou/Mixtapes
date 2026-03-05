@@ -36,3 +36,51 @@ jobs:
         with:
           name: Mixtapes-${{ matrix.arch }}-flatpak
           path: Mixtapes-${{ matrix.arch }}.flatpak
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: flatpak
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Download all flatpak artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Mixtapes-*-flatpak
+          path: downloaded-flatpaks/
+          merge-multiple: true
+
+      - name: Install flatpak ostree
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak ostree
+
+      - name: Create repository and import flatpaks
+        run: |
+          mkdir -p repo
+          ostree init --mode=archive-z2 --repo=repo
+          for f in downloaded-flatpaks/*.flatpak; do
+              flatpak build-import-bundle repo "$f"
+          done
+          flatpak build-update-repo --generate-static-deltas repo
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: repo/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
