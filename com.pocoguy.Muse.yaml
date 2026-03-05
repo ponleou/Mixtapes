@@ -3,11 +3,9 @@ runtime: org.gnome.Platform
 runtime-version: '49'
 sdk: org.gnome.Sdk
 sdk-extensions:
-  - org.freedesktop.Sdk.Extension.node24:
-    version: 24.08
+  - org.freedesktop.Sdk.Extension.node24
 command: muse
 
-# Allow network access during build for pip downloads
 build-options:
   append-path: /usr/lib/sdk/node24/bin
   env:
@@ -26,9 +24,7 @@ finish-args:
   - --device=dri
   - --socket=session-bus
 
-
 modules:
-  # Install Node.js to /app/bin for runtime availability
   - name: nodejs-runtime
     buildsystem: simple
     build-commands:
@@ -40,7 +36,6 @@ modules:
     buildsystem: simple
     build-commands:
       - pip3 install --prefix=${FLATPAK_DEST} --no-cache-dir -r requirements.txt
-      # The yt-dlp[default] is required to play stuff; otherwise it can not find the right formats.
       - pip3 install --prefix=${FLATPAK_DEST} --no-cache-dir --upgrade "yt-dlp[default]"
     sources:
       - type: git
@@ -54,25 +49,19 @@ modules:
       - cp -r src ${FLATPAK_DEST}/lib/muse/
       - cp -r assets ${FLATPAK_DEST}/lib/muse/
       - cp requirements.txt ${FLATPAK_DEST}/lib/muse/
-
       - glib-compile-resources --sourcedir=. src/muse.gresource.xml --target=${FLATPAK_DEST}/lib/muse/src/muse.gresource
-
       - install -Dm644 com.pocoguy.Muse.desktop ${FLATPAK_DEST}/share/applications/com.pocoguy.Muse.desktop
       - install -Dm644 com.pocoguy.Muse.metainfo.xml ${FLATPAK_DEST}/share/metainfo/com.pocoguy.Muse.metainfo.xml
       - install -Dm644 assets/icons/hicolor/scalable/actions/compass2-symbolic.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/com.pocoguy.Muse.svg
-
-      # Launcher script
+      - install -d ${FLATPAK_DEST}/bin
       - |
-        install -d ${FLATPAK_DEST}/bin
         cat > ${FLATPAK_DEST}/bin/muse << 'EOF'
         #!/bin/sh
-        # Use XDG data directory for persistent files
         mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/muse"
         cd "${XDG_DATA_HOME:-$HOME/.local/share}/muse"
         exec python3 /app/lib/muse/src/main.py "$@"
         EOF
       - chmod +x ${FLATPAK_DEST}/bin/muse
-    
     sources:
       - type: git
         url: https://github.com/m-obeid/Muse.git
