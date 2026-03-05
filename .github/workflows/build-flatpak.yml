@@ -37,7 +37,6 @@ jobs:
             --force-clean \
             --default-branch=master \
             --arch=${{ matrix.arch }} \
-            --env=FLATPAK_ENABLE_SDK_EXT=node24 \
             flatpak_app com.pocoguy.Muse.yaml
           flatpak build-bundle repo Mixtapes-${{ matrix.arch }}.flatpak com.pocoguy.Muse master
       - name: Upload artifact

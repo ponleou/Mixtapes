@@ -12,6 +12,7 @@ build-options:
   append-path: /usr/lib/sdk/node24/bin
   env:
     NODEJS_DIR: /usr/lib/sdk/node24
+    FLATPAK_ENABLE_SDK_EXT: node24
   build-args:
     - --share=network
 
