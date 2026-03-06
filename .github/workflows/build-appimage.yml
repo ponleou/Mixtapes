@@ -36,13 +36,14 @@ jobs:
           cp com.pocoguy.Muse.desktop AppDir/usr/share/applications/
           cp assets/icons/hicolor/scalable/actions/compass2-symbolic.svg AppDir/usr/share/icons/hicolor/scalable/apps/com.pocoguy.Muse.svg
           glib-compile-resources --sourcedir=. src/muse.gresource.xml --target=AppDir/usr/share/muse/src/muse.gresource
-          sudo pip3 install -r requirements.txt --prefix=AppDir/usr --no-cache-dir --break-system-packages
-          sudo pip3 install "yt-dlp[default]" --prefix=AppDir/usr --no-cache-dir --break-system-packages
+          mkdir -p AppDir/usr/lib/python3.12/site-packages
+          sudo pip3 install -r requirements.txt --target=AppDir/usr/lib/python3.12/site-packages --no-cache-dir --break-system-packages
+          sudo pip3 install "yt-dlp[default]" --target=AppDir/usr/lib/python3.12/site-packages --no-cache-dir --break-system-packages
 
           # Create launcher
           cat > AppDir/usr/bin/muse << 'EOF'
           #!/bin/bash
-          export PYTHONPATH="$APPDIR/usr/lib/python3.12/site-packages:$PYTHONPATH"
+          export PYTHONPATH="$APPDIR/usr/share/muse:$APPDIR/usr/lib/python3.12/site-packages:$PYTHONPATH"
           cd "$APPDIR/usr/share/muse"
           exec python3 src/main.py "$@"
           EOF

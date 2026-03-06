@@ -30,6 +30,8 @@ AppDir:
       - libgstreamer1.0-0
       - gstreamer1.0-gl
       - nodejs
+      - python3-requests
+      - python3-urllib3
     exclude:
       - tzdata
 
