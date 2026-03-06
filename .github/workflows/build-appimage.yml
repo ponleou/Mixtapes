@@ -56,12 +56,15 @@ jobs:
           grep -vE "PyGObject|mprisify" requirements.txt > requirements-pure.txt
           pip3 install -r requirements-pure.txt --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages
 
-          # Install mprisify and its dependencies with --no-deps to avoid PyGObject source build
-          pip3 install pydbus strenum --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages --no-deps
+          # Install mprisify with --no-deps to avoid PyGObject source build (metadata might be needed if it fails)
           pip3 install "mprisify @ git+https://gitlab.com/zehkira/mprisify.git@v1.0.0" --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages --no-deps
 
           # yt-dlp is pure python, but we ensures it's in the target
           pip3 install "yt-dlp[default]" --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages
+
+          # Debug: List bundled site-packages
+          echo "Bundled site-packages contents:"
+          ls -R "$SITE_PACKAGES"
 
           # Create C loader to satisfy appimage-builder ELF requirement
           cat > muse_loader.c << EOF
