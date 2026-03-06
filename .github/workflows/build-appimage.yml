@@ -10,7 +10,10 @@ on:
 jobs:
   appimage:
     name: Build AppImage
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.arch == 'aarch64' && 'arm64v8/archlinux:latest' || 'archlinux:latest' }}
+      options: --privileged
     strategy:
       matrix:
         arch: [x86_64, aarch64]
@@ -25,13 +28,14 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libglib2.0-dev libcairo2-dev python3-dev libfuse2 libgirepository1.0-dev libxml2-utils
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm python-pip python-gobject gtk4 libadwaita gobject-introspection-runtime base-devel libxml2 fuse2 wget
+          # appimage-builder dependencies
+          pacman -S --noconfirm file binutils patch
 
       - name: Install appimage-builder
         run: |
-          sudo wget https://github.com/AppImageCrafters/appimage-builder/releases/download/v1.1.0/appimage-builder-1.1.0-x86_64.AppImage -O /usr/local/bin/appimage-builder
-          sudo chmod +x /usr/local/bin/appimage-builder
+          pip3 install appimage-builder --break-system-packages
 
       - name: Prepare AppDir
         run: |
@@ -39,21 +43,33 @@ jobs:
           cp -r src assets requirements.txt AppDir/usr/share/muse/
           cp com.pocoguy.Muse.desktop AppDir/usr/share/applications/
           cp assets/icons/hicolor/scalable/actions/compass2-symbolic.svg AppDir/usr/share/icons/hicolor/scalable/apps/com.pocoguy.Muse.svg
+          # glib-compile-resources might be in different package in Arch
+          pacman -S --noconfirm glib2
           glib-compile-resources --sourcedir=. src/muse.gresource.xml --target=AppDir/usr/share/muse/src/muse.gresource
-          mkdir -p AppDir/usr/lib/python3.12/site-packages
-          # PyGObject is bundled via apt to ensure architecture compatibility
-          grep -v "PyGObject" requirements.txt > requirements-pure.txt
-          pip3 install -r requirements-pure.txt --target=AppDir/usr/lib/python3.12/site-packages --no-cache-dir --break-system-packages
-          pip3 install "yt-dlp[default]" --target=AppDir/usr/lib/python3.12/site-packages --no-cache-dir --break-system-packages
+          mkdir -p AppDir/usr/lib/python3.13/site-packages
+          # On Arch, python is 3.13+ likely
+          PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          SITE_PACKAGES="AppDir/usr/lib/python${PYTHON_VERSION}/site-packages"
+          mkdir -p "$SITE_PACKAGES"
+
+          # Arch packages are up to date, we can likely just use requirements.txt
+          # But we still want to avoid bundling PyGObject if we use system python-gobject
+          grep -vE "PyGObject|mprisify" requirements.txt > requirements-pure.txt
+          pip3 install -r requirements-pure.txt --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages
+          pip3 install pydbus --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages --no-deps
+          pip3 install "mprisify @ git+https://gitlab.com/zehkira/mprisify.git@v1.0.0" --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages --no-deps
+          pip3 install "yt-dlp[default]" --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages
 
           # Create launcher
-          cat > AppDir/usr/bin/muse << 'EOF'
+          cat > AppDir/usr/bin/muse << EOF
           #!/bin/bash
           # Include all possible bundled python paths
-          export PYTHONPATH="$APPDIR/usr/share/muse:$APPDIR/usr/lib/python3.12/site-packages:$APPDIR/usr/lib/python3/dist-packages"
-          export PYTHONHOME="$APPDIR/usr"
-          cd "$APPDIR/usr/share/muse"
-          exec python3 src/main.py "$@"
+          # On Arch, we use a dynamic python version discovery
+          PYTHON_VERSION=\$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          export PYTHONPATH="\$APPDIR/usr/share/muse:\$APPDIR/usr/lib/python\$PYTHON_VERSION/site-packages:\$APPDIR/usr/lib/python3/dist-packages"
+          export PYTHONHOME="\$APPDIR/usr"
+          cd "\$APPDIR/usr/share/muse"
+          exec python3 src/main.py "\$@"
           EOF
           chmod +x AppDir/usr/bin/muse
 
@@ -62,13 +78,12 @@ jobs:
         run: |
           sed -i 's/x86_64/aarch64/g' AppImageBuilder.yml
           sed -i 's/amd64/arm64/g' AppImageBuilder.yml
-          sed -i 's|http://archive.ubuntu.com/ubuntu/|http://ports.ubuntu.com/ubuntu-ports/|g' AppImageBuilder.yml
+          # No need to change repo URLs for Arch in the same way as Ubuntu
 
-      - name: Setup multiarch apt
+      - name: Setup multiarch (not needed for Arch repo)
         if: matrix.arch == 'aarch64'
         run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update || true
+          echo "Using Arch ARM64 container, no manual dpkg setup needed"
 
       - name: Build AppImage
         env:
