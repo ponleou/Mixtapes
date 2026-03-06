@@ -11,9 +11,6 @@ jobs:
   appimage:
     name: Build AppImage
     runs-on: ubuntu-latest
-    container:
-      image: ${{ matrix.arch == 'aarch64' && 'arm64v8/debian:sid' || 'debian:sid' }}
-      options: --privileged
     strategy:
       matrix:
         arch: [x86_64, aarch64]
@@ -28,12 +25,16 @@ jobs:
 
       - name: Install dependencies
         run: |
-          apt-get update
-          apt-get install -y python3-pip python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libglib2.0-dev-bin libcairo2-dev python3-dev libfuse2 libgirepository1.0-dev libxml2-utils wget file binutils patch
+          sudo apt-get install -y python3-pip python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libglib2.0-dev-bin libcairo2-dev python3-dev libfuse2 libgirepository1.0-dev libxml2-utils wget file binutils patch qemu-user-static
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            sudo dpkg --add-architecture arm64
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends crossbuild-essential-arm64
+          fi
 
       - name: Install appimage-builder
         run: |
-          pip3 install appimage-builder --break-system-packages
+          sudo pip3 install appimage-builder --break-system-packages
 
       - name: Prepare AppDir
         run: |
@@ -42,11 +43,14 @@ jobs:
           cp com.pocoguy.Muse.desktop AppDir/usr/share/applications/
           cp assets/icons/hicolor/scalable/actions/compass2-symbolic.svg AppDir/usr/share/icons/hicolor/scalable/apps/com.pocoguy.Muse.svg
 
-          # Install glib-compile-resources
-          apt-get install -y libglib2.0-dev
+          # Install glib-compile-resources (host)
+          sudo apt-get install -y libglib2.0-dev
           glib-compile-resources --sourcedir=. src/muse.gresource.xml --target=AppDir/usr/share/muse/src/muse.gresource
 
-          # Detect Python version in Sid
+          # Detect Python version on host (Ubuntu 24.04 usually 3.12, but we'll bundle Sid packages)
+          # We'll use a fixed version in the path for now or let Sid decide if we can.
+          # But for the bundle, let's look at what Sid usually has (currently 3.12 or 3.13)
+          # We'll stick to a dynamic check but execute it with sudo/pip as needed.
           PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
           SITE_PACKAGES="AppDir/usr/lib/python${PYTHON_VERSION}/site-packages"
           mkdir -p "$SITE_PACKAGES"
@@ -55,8 +59,16 @@ jobs:
           grep -vE "PyGObject|mprisify" requirements.txt > requirements-pure.txt
           pip3 install -r requirements-pure.txt --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages
           pip3 install pydbus --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages --no-deps
-          pip3 install "mprisify @ git+https://gitlab.com/zehkira/mprisify.git@v1.0.0" --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages --no-deps
-          pip3 install "yt-dlp[default]" --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages
+
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            pip3 install --platform=linux/aarch64 --only-binary=:all: PyGObject --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages
+            pip3 install --platform=linux/aarch64 --only-binary=:all: mprisify --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages
+            pip3 install --platform=linux/aarch64 --only-binary=:all: "yt-dlp[default]" --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages
+          else
+            pip3 install --platform=linux/x86_64 --only-binary=:all: PyGObject --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages
+            pip3 install --platform=linux/x86_64 --only-binary=:all: mprisify --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages
+            pip3 install --platform=linux/x86_64 --only-binary=:all: "yt-dlp[default]" --target="$SITE_PACKAGES" --no-cache-dir --break-system-packages
+          fi
 
           # Create launcher
           cat > AppDir/usr/bin/muse << EOF
