@@ -66,14 +66,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y flatpak ostree
 
+      - name: Import GPG Key
+        id: import-gpg
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+
       - name: Create repository and import flatpaks
         run: |
           mkdir -p repo
           ostree init --mode=archive-z2 --repo=repo
+
+          # Export the public key for users to download
+          gpg --export --armor ${{ secrets.GPG_KEY_ID }} > repo/mixtapes.gpg
+
           for f in downloaded-flatpaks/*.flatpak; do
             flatpak build-import-bundle repo "$f"
           done
-          flatpak build-update-repo --generate-static-deltas repo
+
+          # Update repo and generate summary signed with the GPG key
+          flatpak build-update-repo --generate-static-deltas --gpg-sign=${{ secrets.GPG_KEY_ID }} repo
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
