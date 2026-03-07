@@ -81,7 +81,7 @@ jobs:
           gpg --export --armor ${{ secrets.GPG_KEY_ID }} > repo/mixtapes.gpg
 
           for f in downloaded-flatpaks/*.flatpak; do
-            flatpak build-import-bundle repo "$f"
+            flatpak build-import-bundle --gpg-sign=${{ secrets.GPG_KEY_ID }} repo "$f"
           done
 
           # Update repo and generate summary signed with the GPG key
