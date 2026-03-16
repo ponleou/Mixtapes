@@ -1772,6 +1772,7 @@ class PlaylistPage(Adw.Bin):
 
     def set_compact_mode(self, compact):
         if compact:
+            self.add_css_class("compact")
             self.header_info_box.set_orientation(Gtk.Orientation.VERTICAL)
             self.header_info_box.set_halign(Gtk.Align.CENTER)
             self.cover_wrapper.set_halign(Gtk.Align.CENTER)
@@ -1784,6 +1785,7 @@ class PlaylistPage(Adw.Bin):
             self.stats_label.set_halign(Gtk.Align.CENTER)
             self.actions_box.set_halign(Gtk.Align.CENTER)
         else:
+            self.remove_css_class("compact")
             self.header_info_box.set_orientation(Gtk.Orientation.HORIZONTAL)
             self.header_info_box.set_halign(Gtk.Align.START)
             self.cover_wrapper.set_halign(Gtk.Align.START)

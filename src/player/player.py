@@ -6,6 +6,7 @@ import os
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst, GObject, GLib, GdkPixbuf
 import urllib.request
+import glob
 from yt_dlp import YoutubeDL
 from mprisify.server import Server
 from ui.utils import get_high_res_url, get_ytimg_fallbacks
@@ -52,9 +53,6 @@ class Player(GObject.Object):
             "format": "bestaudio/best",
             "quiet": True,
             "noplaylist": True,
-            "extract_flat": False,
-            "js_runtimes": {"node": {}},
-            "remote_components": ["ejs:github"],
         }
 
         self.bus = self.player.get_bus()
@@ -633,7 +631,7 @@ class Player(GObject.Object):
             return
         import os
 
-        url = f"https://www.youtube.com/watch?v={video_id}"
+        url = f"https://music.youtube.com/watch?v={video_id}"
 
         # Use a local copy of options to prevent race conditions
         opts = self.ydl_opts.copy()
@@ -867,7 +865,17 @@ class Player(GObject.Object):
                     # 3. Save to cache
                     cache_dir = os.path.join(GLib.get_user_cache_dir(), "mixtapes")
                     os.makedirs(cache_dir, exist_ok=True)
-                    target_path = os.path.join(cache_dir, "mpris_art.jpg")
+                    
+                    # Cleanup old art files to prevent bloat and cache issues
+                    for old_art in glob.glob(os.path.join(cache_dir, "mpris_art_*.jpg")):
+                        try:
+                            os.remove(old_art)
+                        except:
+                            pass
+
+                    # Use unique filename per track to bypass MPRIS client caching
+                    safe_video_id = video_id.replace("-", "_").replace(".", "_")
+                    target_path = os.path.join(cache_dir, f"mpris_art_{safe_video_id}.jpg")
 
                     pixbuf.savev(target_path, "jpeg", ["quality"], ["90"])
                     self.mpris_art_url = f"file://{target_path}"

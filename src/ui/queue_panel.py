@@ -3,7 +3,7 @@ import threading
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, GObject, Pango, Gdk, Gio, GLib
+from gi.repository import Gtk, Adw, GObject, Pango, Gdk, Gio, GLib
 
 
 class QueueItem(GObject.Object):
@@ -166,60 +166,68 @@ class QueuePanel(Gtk.Box):
     def __init__(self, player):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.player = player
-        self.set_size_request(320, -1)  # Minimum width sidebar
+        self.set_size_request(200, -1)  # Relaxed minimum width
         self.add_css_class("background")
         self.add_css_class("queue-panel")  # For potential styling
 
-        # Header
-        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        header.set_margin_top(12)
-        header.set_margin_bottom(12)
-        header.set_margin_start(12)
-        header.set_margin_end(12)
-
-        title = Gtk.Label(label="Queue")
-        title.add_css_class("title-4")
-        title.set_hexpand(True)
-        title.set_halign(Gtk.Align.START)
-        header.append(title)
+        # Use Adw.ToolbarView and Adw.HeaderBar for a native look
+        self.toolbar_view = Adw.ToolbarView()
+        self.header_bar = Adw.HeaderBar()
+        self.header_bar.add_css_class("flat")
+        
+        # Title/Subtitle in HeaderBar
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        title_box.set_valign(Gtk.Align.CENTER)
+        
+        self.title_label = Gtk.Label(label="Queue")
+        self.title_label.add_css_class("sidebar-title")
+        self.title_label.set_halign(Gtk.Align.CENTER)
+        
+        self.count_label = Gtk.Label(label="0 tracks")
+        self.count_label.add_css_class("caption-2")
+        self.count_label.add_css_class("dim-label")
+        self.count_label.set_halign(Gtk.Align.CENTER)
+        self.count_label.set_opacity(0.6)
+        
+        title_box.append(self.title_label)
+        title_box.append(self.count_label)
+        self.header_bar.set_title_widget(title_box)
 
         # Shuffle Toggle
         self.shuffle_btn = Gtk.ToggleButton(icon_name="media-playlist-shuffle-symbolic")
         self.shuffle_btn.set_tooltip_text("Shuffle Queue")
         self.shuffle_btn.connect("clicked", self._on_shuffle_clicked)
-        header.append(self.shuffle_btn)
+        self.header_bar.pack_start(self.shuffle_btn)
 
         # Repeat Toggle
         self.repeat_btn = Gtk.Button(icon_name="media-playlist-consecutive-symbolic")
         self.repeat_btn.set_tooltip_text("Repeat Mode")
         self.repeat_btn.connect("clicked", self._on_repeat_clicked)
-        header.append(self.repeat_btn)
+        self.header_bar.pack_start(self.repeat_btn)
 
+        # Clear Button
         clear_btn = Gtk.Button(label="Clear")
         clear_btn.connect("clicked", self._on_clear_clicked)
-        header.append(clear_btn)
+        self.header_bar.pack_end(clear_btn)
 
         # More Menu
         self.action_group = Gio.SimpleActionGroup()
         self.insert_action_group("queue", self.action_group)
-
-        action_add = Gio.SimpleAction.new(
-            "add_all_to_playlist", GLib.VariantType.new("s")
-        )
+        action_add = Gio.SimpleAction.new("add_all_to_playlist", GLib.VariantType.new("s"))
         action_add.connect("activate", self._on_add_all_to_playlist)
         self.action_group.add_action(action_add)
 
         self.more_btn = Gtk.MenuButton(icon_name="view-more-symbolic")
         self.more_btn.set_tooltip_text("More Options")
-
         self.more_menu_model = Gio.Menu()
         self.playlist_menu = Gio.Menu()
         self.more_menu_model.append_submenu("Add all to Playlist", self.playlist_menu)
         self.more_btn.set_menu_model(self.more_menu_model)
+        self.header_bar.pack_end(self.more_btn)
 
-        header.append(self.more_btn)
+        self.toolbar_view.add_top_bar(self.header_bar)
+        self.append(self.toolbar_view)
 
-        self.append(header)
 
         # ListView Setup
         self.store = Gio.ListStore(item_type=QueueItem)
@@ -347,6 +355,9 @@ class QueuePanel(Gtk.Box):
 
             self.store.splice(0, self.store.get_n_items(), items)
             self._last_queue_len = len(queue)
+            
+            # Update count label
+            self.count_label.set_label(f"{len(queue)} tracks")
 
             # Restore selection to current index
             if current_idx >= 0 and current_idx < len(items):
@@ -436,5 +447,7 @@ class QueuePanel(Gtk.Box):
     def _on_clear_clicked(self, btn):
         self.player.clear_queue()
         root = self.get_root()
-        if hasattr(root, "split_view"):
-            root.split_view.set_show_sidebar(False)
+        if hasattr(root, "toggle_queue"):
+            # If we are clearing, we might want to hide it
+            if not self.player.queue:
+                 root.toggle_queue()

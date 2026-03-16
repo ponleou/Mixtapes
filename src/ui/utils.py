@@ -1,11 +1,14 @@
+import os
 import threading
 import urllib.request
-from collections import OrderedDict
+import collections
 import re
-from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
+from gi.repository import Gtk, Gdk, GObject, GLib, GdkPixbuf
+
+print("DEBUG: Loading ui/utils.py v1.1 (Placeholder fix)")
 
 # Bounded LRU Cache to prevent memory leaks (max 100 images)
-IMG_CACHE = OrderedDict()
+IMG_CACHE = collections.OrderedDict()
 MAX_CACHE_SIZE = 100
 
 
@@ -213,6 +216,7 @@ class AsyncImage(Gtk.Image):
         # Determine target dimensions
         self.target_w = width if width else size
         self.target_h = height if height else size
+        self._is_placeholder = True
 
         if not self.target_w:
             self.target_w = 48
@@ -227,6 +231,7 @@ class AsyncImage(Gtk.Image):
             pass
 
         self.set_from_icon_name("image-missing-symbolic")  # Placeholder
+        self._is_placeholder = True
         self.url = url
         self.circular = circular
 
@@ -246,6 +251,12 @@ class AsyncImage(Gtk.Image):
         cached_pixbuf = IMG_CACHE.get(url)
         if cached_pixbuf:
             IMG_CACHE.move_to_end(url)
+        else:
+            # Only show placeholder if we don't already have a valid image.
+            # This prevents "flicker" when updating covers.
+            if not self.get_paintable() or self._is_placeholder:
+                self.set_from_icon_name("image-missing-symbolic")
+                self._is_placeholder = True
 
         fallbacks = kwargs.get("fallbacks") or get_ytimg_fallbacks(url)
         # Prioritize the clean fallback versions.
@@ -352,6 +363,7 @@ class AsyncImage(Gtk.Image):
 
         texture = Gdk.Texture.new_for_pixbuf(pixbuf)
         self.set_from_paintable(texture)
+        self._is_placeholder = False
 
     def _sync_player_url(self, url):
         if not self.player or not url:
@@ -404,6 +416,7 @@ class AsyncPicture(Gtk.Picture):
         self.crop_to_square = crop_to_square
         self.target_size = target_size
         self.url = url
+        self._is_placeholder = True
 
         # Constrain the picture widget to target_size so it doesn't
         # request more space when a non-square texture is loaded
@@ -414,8 +427,11 @@ class AsyncPicture(Gtk.Picture):
 
         if icon_name:
             self.set_from_icon_name(icon_name)
-        elif url:
-            self.load_url(url)
+        else:
+            self.set_from_icon_name("image-missing-symbolic")
+            self._is_placeholder = True
+            if url:
+                self.load_url(url)
 
     def set_from_icon_name(self, icon_name):
         if not icon_name:
@@ -431,8 +447,10 @@ class AsyncPicture(Gtk.Picture):
         )
         if icon_paintable:
             self.set_paintable(icon_paintable)
+            self._is_placeholder = ("image-missing" in icon_name)
         else:
             self.set_paintable(None)
+            self._is_placeholder = True
 
     def load_url(self, url, **kwargs):
         orig_url = url
@@ -447,6 +465,13 @@ class AsyncPicture(Gtk.Picture):
             pixbuf = IMG_CACHE[url]
             GLib.idle_add(self._apply_pixbuf, pixbuf, url)
             return
+        
+        # Only show placeholder if we don't already have one.
+        # This prevents flickering during cover updates.
+        if not self.get_paintable() or self._is_placeholder:
+            # We must NOT call get_icon_name() here as it leads to AttributeError on Gtk.Picture
+            self.set_from_icon_name("image-missing-symbolic")
+            self._is_placeholder = True
 
         fallbacks = kwargs.get("fallbacks") or get_ytimg_fallbacks(url)
         # Prioritize the clean fallback versions.
@@ -548,6 +573,7 @@ class AsyncPicture(Gtk.Picture):
         # Convert to Texture and paint
         texture = Gdk.Texture.new_for_pixbuf(pixbuf)
         self.set_paintable(texture)
+        self._is_placeholder = False
 
     def _sync_player_url(self, url):
         if not self.player or not url:
@@ -561,31 +587,30 @@ class AsyncPicture(Gtk.Picture):
 class MarqueeLabel(Gtk.ScrolledWindow):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # EXTERNAL means the content can overflow, but no scrollbars are drawn
         self.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.NEVER)
+        self.set_hexpand(True)
 
-        self.label = Gtk.Label()
-        self.label.set_halign(Gtk.Align.START)
-        self.label.set_valign(Gtk.Align.CENTER)
-        self.set_child(self.label)
+        self.box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=60)
+        self.label1 = Gtk.Label()
+        self.label2 = Gtk.Label()
+        
+        self.box.append(self.label1)
+        self.box.append(self.label2)
+        self.set_child(self.box)
 
-        # Animation variables
         self._tick_id = 0
-        self._pause_frames = 60  # Pause for ~1 second at the edges
-        self._current_pause = self._pause_frames
-        self._direction = 1  # 1 = scrolling right, -1 = scrolling left
+        self._loop_spacing = 60
+        self._is_animating = False
 
-        # Only animate when actually visible on screen
         self.connect("map", self._start_marquee)
         self.connect("unmap", self._stop_marquee)
 
     def add_css_class(self, class_name):
-        # Apply CSS to the actual text label, not the scrolled window container
-        self.label.add_css_class(class_name)
+        self.label1.add_css_class(class_name)
+        self.label2.add_css_class(class_name)
 
     def _start_marquee(self, *args):
         if self._tick_id == 0:
-            # Sync to the monitor's frame clock for buttery smooth movement
             self._tick_id = self.add_tick_callback(self._on_tick)
 
     def _stop_marquee(self, *args):
@@ -594,52 +619,45 @@ class MarqueeLabel(Gtk.ScrolledWindow):
             self._tick_id = 0
 
     def _on_tick(self, widget, frame_clock):
-        adj = self.get_hadjustment()
-        max_val = adj.get_upper() - adj.get_page_size()
+        width = self.get_width()
+        label_w = self.label1.get_width()
 
-        # If the text fits perfectly, don't scroll at all!
-        if max_val <= 0:
-            adj.set_value(0)
+        # If it fits, don't animate and keep centered/start aligned
+        if label_w <= width:
+            self.label2.set_visible(False)
+            self.get_hadjustment().set_value(0)
+            self._is_animating = False
             return True
 
-        # Handle the pause at the edges
-        if self._current_pause > 0:
-            self._current_pause -= 1
-            return True
+        # Otherwise, animate
+        self.label2.set_visible(True)
+        self._is_animating = True
 
-        # Constant speed of ~50 pixels per second
-        # GTK frame clock provides frame time in microseconds
         frame_time = frame_clock.get_frame_time()
         if not hasattr(self, "_last_frame_time"):
             self._last_frame_time = frame_time
             return True
 
-        delta = (frame_time - self._last_frame_time) / 1_000_000.0  # seconds
+        delta = (frame_time - self._last_frame_time) / 1_000_000.0
         self._last_frame_time = frame_time
 
-        # Move text by speed * delta
+        adj = self.get_hadjustment()
         speed = 40.0  # px/s
-        new_val = adj.get_value() + (speed * delta * self._direction)
+        new_val = adj.get_value() + (speed * delta)
 
-        # Reverse direction if we hit an edge
-        if new_val >= max_val:
-            new_val = max_val
-            self._direction = -1
-            self._current_pause = self._pause_frames
-        elif new_val <= 0:
-            new_val = 0
-            self._direction = 1
-            self._current_pause = self._pause_frames
+        # Seamless loop point
+        loop_point = label_w + self._loop_spacing
+        if new_val >= loop_point:
+            new_val -= loop_point
 
         adj.set_value(new_val)
         return True
 
     def set_label(self, text):
-        self.label.set_label(text)
-        # Reset position and animation state when text changes
+        self.label1.set_label(text)
+        self.label2.set_label(text)
+        # Reset scroll on text change
         self.get_hadjustment().set_value(0)
-        self._current_pause = self._pause_frames
-        self._direction = 1
         if hasattr(self, "_last_frame_time"):
             delattr(self, "_last_frame_time")
 

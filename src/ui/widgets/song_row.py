@@ -82,6 +82,8 @@ class SongRowWidget(Gtk.Box):
         self.explicit_badge = Gtk.Label(label="E")
         self.explicit_badge.add_css_class("explicit-badge")
         self.explicit_badge.set_valign(Gtk.Align.CENTER)
+        self.explicit_badge.set_halign(Gtk.Align.CENTER)
+        self.explicit_badge.set_justify(Gtk.Justification.CENTER)
         self.explicit_badge.set_visible(False)
 
         self.title_box.append(self.title_label)

@@ -1,5 +1,4 @@
 from gi.repository import Gtk, Adw, GObject, Gdk
-from ui.queue_panel import QueuePanel
 
 
 class PlayerBar(Gtk.Box):
@@ -37,8 +36,8 @@ class PlayerBar(Gtk.Box):
 
         # 2. Main Content Area (Horizontal)
         content_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        content_box.set_margin_top(12)
-        content_box.set_margin_bottom(8)
+        content_box.set_margin_top(0) # Absolute minimum padding
+        content_box.set_margin_bottom(6)
         content_box.set_margin_start(12)
         content_box.set_margin_end(12)
         self.append(content_box)
@@ -68,6 +67,7 @@ class PlayerBar(Gtk.Box):
         meta_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         meta_box.set_valign(Gtk.Align.CENTER)
         meta_box.set_hexpand(True)
+        meta_box.set_margin_top(0) # Added as per instruction
 
         self.title_label = Gtk.Label(label="Not Playing")
         self.title_label.set_halign(Gtk.Align.START)
@@ -84,7 +84,8 @@ class PlayerBar(Gtk.Box):
 
         self.artist_label = Gtk.Label(label="")
         self.artist_label.set_ellipsize(3)  # END
-        self.artist_label.set_max_width_chars(30)
+        self.artist_label.set_width_chars(1) # Allow shrinking fully
+        self.artist_label.set_max_width_chars(22) # Reverted to 22 (less aggressive)
         self.artist_label.add_css_class("caption")
 
         self.artist_btn.set_child(self.artist_label)
@@ -95,7 +96,7 @@ class PlayerBar(Gtk.Box):
         content_box.append(meta_box)
 
         # Controls
-        controls_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        controls_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         controls_box.set_valign(Gtk.Align.CENTER)
 
         # Timings Label
@@ -175,7 +176,7 @@ class PlayerBar(Gtk.Box):
         controls_box.append(self.volume_container)
 
         # Queue Button
-        self.queue_btn = Gtk.ToggleButton(icon_name="view-list-symbolic")
+        self.queue_btn = Gtk.ToggleButton(icon_name="music-queue-symbolic")
         self.queue_btn.set_valign(Gtk.Align.CENTER)
         self.queue_btn.add_css_class("flat")
         self.queue_btn.set_tooltip_text("Toggle Queue")
@@ -235,17 +236,20 @@ class PlayerBar(Gtk.Box):
     def set_compact(self, compact):
         self.is_compact = compact
         if compact:
+            self.add_css_class("compact")
             self.timings_label.set_visible(False)
             self.prev_btn.set_visible(False)
             self.next_btn.set_visible(False)
             self.volume_container.set_visible(False)
-            self.queue_btn.set_visible(False)
+            self.queue_btn.set_visible(True) # Keep it
 
+            # Tighten mobile layout
             self.content_box.set_spacing(6)
             self.controls_box.set_spacing(6)
             self.content_box.set_margin_start(6)
             self.content_box.set_margin_end(6)
         else:
+            self.remove_css_class("compact")
             self.timings_label.set_visible(True)
             self.prev_btn.set_visible(True)
             self.next_btn.set_visible(True)
@@ -253,6 +257,7 @@ class PlayerBar(Gtk.Box):
             self.queue_btn.set_visible(True)
             self.like_btn.set_visible(bool(self.player.current_video_id))
 
+            # Desktop layout
             self.content_box.set_spacing(12)
             self.controls_box.set_spacing(12)
             self.content_box.set_margin_start(12)
@@ -320,9 +325,9 @@ class PlayerBar(Gtk.Box):
             color: @accent_color;
         }
         .player-scale {
-            margin-top: -10px; 
-            margin-bottom: -10px; 
-            min-height: 20px; /* Larger hit target */
+            margin-top: -6px; /* Pull closer to roof */
+            margin-bottom: 0px; 
+            min-height: 14px; /* Tighter target */
             padding: 0px;
         }
         .player-scale trough {

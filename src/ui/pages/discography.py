@@ -77,6 +77,20 @@ class DiscographyPage(Adw.Bin):
 
         self.set_child(self.main_box)
 
+    def set_compact_mode(self, compact):
+        if compact:
+            self.add_css_class("compact")
+            self.content_box.set_spacing(12)
+            self.content_box.set_margin_start(12)
+            self.content_box.set_margin_end(12)
+            self.flow_box.set_max_children_per_line(3)
+        else:
+            self.remove_css_class("compact")
+            self.content_box.set_spacing(16)
+            self.content_box.set_margin_start(24)
+            self.content_box.set_margin_end(24)
+            self.flow_box.set_max_children_per_line(5)
+
     def load_discography(
         self, channel_id, title, browse_id=None, params=None, initial_items=None
     ):

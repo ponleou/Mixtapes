@@ -117,6 +117,14 @@ class LibraryPage(Adw.Bin):
         self.loading_row_spinner = None
         self.player.connect("state-changed", self.on_player_state_changed)
 
+    def set_compact_mode(self, compact):
+        if compact:
+            self.add_css_class("compact")
+            self.content_box.set_spacing(16)
+        else:
+            self.remove_css_class("compact")
+            self.content_box.set_spacing(24)
+
     def clear(self):
         """Clears all playlists from the UI."""
         print("Clearing LibraryPage playlists...")

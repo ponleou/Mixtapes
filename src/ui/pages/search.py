@@ -85,6 +85,16 @@ class SearchPage(Adw.Bin):
         self.loading_row_spinner = None
         self.player.connect("state-changed", self.on_player_state_changed)
 
+    def set_compact_mode(self, compact):
+        if compact:
+            self.add_css_class("compact")
+            self.results_box.set_spacing(16)
+            self.explore_box.set_spacing(16)
+        else:
+            self.remove_css_class("compact")
+            self.results_box.set_spacing(24)
+            self.explore_box.set_spacing(24)
+
         # Load explore data
         self.load_explore_data()
 

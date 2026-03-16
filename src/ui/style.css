@@ -144,23 +144,55 @@ listview.playlist-view > row:disabled {
   background-color: alpha(currentColor, 0.15);
   color: inherit;
   border-radius: 2px;
-  width: 16px;
-  height: 16px;
   min-width: 16px;
   min-height: 16px;
   padding: 0;
   font-weight: 800;
   font-size: 10px;
   opacity: 0.8;
-  /* Center the E vertically and horizontally */
-  text-align: center;
-  line-height: 16px;
 }
 
 .playlist-cover {
   min-width: 200px;
   min-height: 200px;
   border-radius: 12px;
+}
+
+.queue-header {
+  background-color: alpha(@window_bg_color, 0.4);
+}
+
+.queue-header .caption {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Make bottom switcher look more like a nav bar */
+.expanded-player adwviewswitcher {
+  background-color: transparent;
+  padding: 4px;
+}
+
+.expanded-player adwviewswitcher button {
+  border-radius: 8px;
+}
+
+/* Volume Button & Popover */
+.expanded-player .vol-btn {
+  opacity: 0.8;
+}
+
+.expanded-player .vol-btn:hover {
+  opacity: 1.0;
+}
+
+.compact-popover > contents {
+    padding: 2px;
+}
+
+.expanded-player .vol-popover-box {
+    padding: 4px;
 }
 
 .compact .playlist-cover {
@@ -175,4 +207,24 @@ listview.playlist-view > row:disabled {
 
 .compact .header-info-box {
   margin-bottom: 24px;
+}
+
+/* Sidebar (Nautilus-like) */
+.sidebar {
+  background-color: @window_bg_color;
+  border-right: 1px solid @borders;
+}
+
+/* Ensure queue panel within sidebar fits well */
+.sidebar listview {
+  background-color: transparent;
+}
+
+.queue-panel {
+    background-color: transparent;
+}
+
+.sidebar-title {
+    font-weight: 800;
+    color: @theme_fg_color;
 }

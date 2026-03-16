@@ -23,6 +23,9 @@ class MusicApp(Adw.Application):
             resource_path = os.path.join(os.path.dirname(__file__), "muse.gresource")
             resource = Gio.Resource.load(resource_path)
             resource._register()
+            
+            # Add icon resource path
+            Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_resource_path("/com/pocoguy/muse/icons")
         except Exception as e:
             print(f"Failed to load GResource: {e}")
 

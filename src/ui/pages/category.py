@@ -63,6 +63,14 @@ class CategoryPage(Adw.Bin):
 
         self.set_child(self.main_box)
 
+    def set_compact_mode(self, compact):
+        if compact:
+            self.add_css_class("compact")
+            self.content_box.set_spacing(16)
+        else:
+            self.remove_css_class("compact")
+            self.content_box.set_spacing(32)
+
     def load_category(self, params, title):
         self.params = params
         self.title = title

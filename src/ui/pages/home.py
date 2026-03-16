@@ -33,6 +33,12 @@ class HomePage(Adw.Bin):
         
         self.set_child(scroll)
 
+    def set_compact_mode(self, compact):
+        if compact:
+            self.add_css_class("compact")
+        else:
+            self.remove_css_class("compact")
+
     def on_test_play(self, btn):
         if self.player:
             # Video ID for Billy Idol

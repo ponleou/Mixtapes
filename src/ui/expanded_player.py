@@ -1,5 +1,4 @@
-import gi
-from gi.repository import Gtk, Adw, GObject, GLib, Gdk, Pango
+from gi.repository import Gtk, Adw, GObject, GLib, Pango
 from ui.utils import AsyncPicture, LikeButton, MarqueeLabel
 from ui.queue_panel import QueuePanel
 
@@ -24,12 +23,26 @@ class ExpandedPlayer(Gtk.Box):
         self.player = player
         self.on_artist_click = on_artist_click
         self.on_album_click = on_album_click
+        self._is_buffering_spinner = False
 
-        # 1. The Stack: Transitions between Player and Queue
-        self.stack = Gtk.Stack()
-        self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
-        self.stack.set_vexpand(True)
-        self.append(self.stack)
+        self.view_stack = Adw.ViewStack()
+        self.view_stack.set_vexpand(True)
+        # Adw.ViewStack doesn't support transition types in all versions, 
+        # and it's handled by libadwaita's animation system.
+
+        self.switcher_title = Adw.ViewSwitcherTitle()
+        self.switcher_title.set_stack(self.view_stack)
+
+        self.set_margin_top(32)
+        self.append(self.view_stack)
+
+        self.switcher = Adw.ViewSwitcher()
+        self.switcher.set_stack(self.view_stack)
+        self.switcher.set_policy(Adw.ViewSwitcherPolicy.WIDE)
+        self.switcher.set_halign(Gtk.Align.CENTER)
+        self.switcher.set_margin_top(8)
+        self.switcher.set_margin_bottom(8)
+        self.append(self.switcher)
 
         # ==========================================
         # PAGE 1: THE PLAYER VIEW
@@ -38,17 +51,10 @@ class ExpandedPlayer(Gtk.Box):
         self.player_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.player_scroll.set_propagate_natural_height(True)
 
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        main_box.set_margin_top(0)
-        main_box.set_margin_bottom(16)
-        main_box.set_margin_start(24)
-        main_box.set_margin_end(24)
 
-        # Header Spacer
-        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        header_box.set_margin_top(8)
-        header_box.set_margin_bottom(8)
-        main_box.append(header_box)
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        main_box.set_margin_top(12)
+        main_box.set_margin_bottom(16)
 
         self.covers = []
         self.cover_img = self._make_cover()  # fallback center
@@ -65,6 +71,8 @@ class ExpandedPlayer(Gtk.Box):
         cover_frame.set_hexpand(True)
         cover_frame.set_overflow(Gtk.Overflow.HIDDEN)
         cover_frame.set_child(self.carousel)
+        cover_frame.set_margin_start(24)
+        cover_frame.set_margin_end(24)
         self._cover_frame = cover_frame
 
         # Add tap gesture for album navigation
@@ -82,6 +90,8 @@ class ExpandedPlayer(Gtk.Box):
         # Metadata & Like
         meta_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         meta_row.set_halign(Gtk.Align.FILL)
+        meta_row.set_margin_start(32)
+        meta_row.set_margin_end(32)
 
         text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         text_box.set_hexpand(True)
@@ -118,14 +128,19 @@ class ExpandedPlayer(Gtk.Box):
         meta_row.append(self.like_btn)
         main_box.append(meta_row)
 
-        # Progress Slider
         progress_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        progress_box.set_margin_start(16)
+        progress_box.set_margin_end(16)
         self.scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL)
         self.scale.set_range(0, 100)
+        self.scale.add_css_class("progress-scale")
         self.scale.connect("change-value", self.on_scale_change_value)
         progress_box.append(self.scale)
 
         timings_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        timings_box.set_margin_start(8)
+        timings_box.set_margin_end(8)
+        timings_box.set_margin_top(0)
         self.pos_label = Gtk.Label(label="0:00")
         self.pos_label.add_css_class("caption")
         self.pos_label.add_css_class("numeric")
@@ -144,18 +159,57 @@ class ExpandedPlayer(Gtk.Box):
         main_box.append(progress_box)
 
         # Media Controls
-        controls_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=24)
+        controls_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         controls_box.set_halign(Gtk.Align.CENTER)
-        controls_box.set_margin_top(8)
+        controls_box.set_margin_top(20)
+        controls_box.set_margin_start(24)
+        controls_box.set_margin_end(24)
+
+        self.vol_btn = Gtk.MenuButton()
+        self.vol_btn.set_icon_name("audio-volume-high-symbolic")
+        self.vol_btn.set_direction(Gtk.ArrowType.UP)
+        self.vol_btn.add_css_class("flat")
+        self.vol_btn.add_css_class("circular")
+        self.vol_btn.set_valign(Gtk.Align.CENTER)
+
+        self.vol_popover = Gtk.Popover()
+        self.vol_popover.set_position(Gtk.PositionType.TOP)
+        self.vol_popover.set_has_arrow(True)
+        self.vol_popover.add_css_class("compact-popover")
+        self.vol_popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.vol_popover_box.set_margin_top(12)
+        self.vol_popover_box.set_margin_bottom(12)
+        self.vol_popover_box.set_margin_start(8)
+        self.vol_popover_box.set_margin_end(8)
+        
+        self.volume_scale = Gtk.Scale(orientation=Gtk.Orientation.VERTICAL)
+        self.volume_scale.set_range(0, 1.0)
+        self.volume_scale.set_inverted(True)
+        self.volume_scale.set_size_request(-1, 150)
+        self.volume_scale.set_value(self.player.get_volume())
+        self.volume_scale.connect("value-changed", self.on_volume_scale_changed)
+
+        self.vol_popover_box.append(self.volume_scale)
+        self.vol_popover.set_child(self.vol_popover_box)
+        self.vol_btn.set_popover(self.vol_popover)
 
         self.prev_btn = Gtk.Button(icon_name="media-skip-backward-symbolic")
-        self.prev_btn.set_size_request(56, 56)
+        self.prev_btn.set_size_request(48, 48)
         self.prev_btn.add_css_class("circular")
         self.prev_btn.set_valign(Gtk.Align.CENTER)
         self.prev_btn.connect("clicked", lambda x: self.player.previous())
 
+        # Balancer button to keep things centered
+        self.balancer_btn = Gtk.Button(icon_name="view-more-symbolic")
+        self.balancer_btn.add_css_class("flat")
+        self.balancer_btn.add_css_class("circular")
+        self.balancer_btn.set_valign(Gtk.Align.CENTER)
+        self.balancer_btn.set_opacity(0.15) # Barely visible placeholder
+        self.balancer_btn.set_receives_default(False)
+        self.balancer_btn.set_can_focus(False)
+
         self.play_btn = Gtk.Button()
-        self.play_btn.set_size_request(80, 80)
+        self.play_btn.set_size_request(64, 64)
         self.play_btn.add_css_class("circular")
         self.play_btn.add_css_class("suggested-action")
         self.play_btn.set_valign(Gtk.Align.CENTER)
@@ -166,91 +220,50 @@ class ExpandedPlayer(Gtk.Box):
         self.play_btn_stack.set_transition_duration(200)
 
         self.play_icon = Gtk.Image.new_from_icon_name("media-playback-start-symbolic")
-        self.play_icon.set_pixel_size(32)
+        self.play_icon.set_pixel_size(24)
         self.play_btn_stack.add_named(self.play_icon, "icon")
 
         self.play_spinner = Adw.Spinner()
-        self.play_spinner.set_size_request(32, 32)
+        self.play_spinner.set_size_request(24, 24)
         self.play_btn_stack.add_named(self.play_spinner, "spinner")
 
         self.play_btn.set_child(self.play_btn_stack)
 
         self.next_btn = Gtk.Button(icon_name="media-skip-forward-symbolic")
-        self.next_btn.set_size_request(56, 56)
+        self.next_btn.set_size_request(48, 48)
         self.next_btn.add_css_class("circular")
         self.next_btn.set_valign(Gtk.Align.CENTER)
         self.next_btn.connect("clicked", lambda x: self.player.next())
 
+        controls_box.append(self.vol_btn)
         controls_box.append(self.prev_btn)
         controls_box.append(self.play_btn)
         controls_box.append(self.next_btn)
+        controls_box.append(self.balancer_btn)
         main_box.append(controls_box)
 
-        # Bottom Row: Volume & Queue Toggle
-        bottom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
-        bottom_box.set_halign(Gtk.Align.FILL)
-        bottom_box.set_margin_top(24)
-
-        self.vol_icon = Gtk.Image.new_from_icon_name("audio-volume-high-symbolic")
-        self.vol_icon.set_opacity(0.7)
-
-        self.volume_scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL)
-        self.volume_scale.set_range(0, 1.0)
-        self.volume_scale.set_hexpand(True)
-        self.volume_scale.set_value(self.player.get_volume())
-        self.volume_scale.connect("value-changed", self.on_volume_scale_changed)
-
-        self.show_queue_btn = Gtk.Button(icon_name="view-list-symbolic")
-        self.show_queue_btn.add_css_class("flat")
-        self.show_queue_btn.add_css_class("circular")
-        self.show_queue_btn.connect(
-            "clicked", lambda x: self.stack.set_visible_child_name("queue")
-        )
-
-        bottom_box.append(self.vol_icon)
-        bottom_box.append(self.volume_scale)
-        bottom_box.append(self.show_queue_btn)
-        main_box.append(bottom_box)
-
         self.player_scroll.set_child(main_box)
-        self.stack.add_named(self.player_scroll, "player")
+        self.view_stack.add_titled_with_icon(
+            self.player_scroll, "player", "Player", "folder-music-symbolic"
+        )
 
         # ==========================================
         # PAGE 2: THE QUEUE VIEW
         # ==========================================
-        queue_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        queue_box.set_margin_top(12)
-
-        q_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        q_header.set_margin_start(16)
-        q_header.set_margin_end(16)
-        q_header.set_margin_bottom(12)
-
-        back_btn = Gtk.Button(icon_name="go-previous-symbolic")
-        back_btn.add_css_class("flat")
-        back_btn.add_css_class("circular")
-        back_btn.connect(
-            "clicked", lambda x: self.stack.set_visible_child_name("player")
-        )
-
-        q_title = Gtk.Label(label="")
-        q_title.add_css_class("heading")
-        q_title.set_hexpand(True)
-        q_title.set_halign(Gtk.Align.CENTER)
-
-        q_spacer = Gtk.Box()
-        q_spacer.set_size_request(32, -1)
-
-        q_header.append(back_btn)
-        q_header.append(q_title)
-        q_header.append(q_spacer)
-        queue_box.append(q_header)
+        queue_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        queue_box.set_margin_top(0)
 
         self.queue_panel = QueuePanel(self.player)
         self.queue_panel.set_vexpand(True)
+        
+        # Remove the internal header of QueuePanel since it already has one,
+        # or maybe we want a dedicated header here?
+        # Let's keep it simple for now.
+        
         queue_box.append(self.queue_panel)
-
-        self.stack.add_named(queue_box, "queue")
+        self.view_stack.add_titled_with_icon(
+            queue_box, "queue", "Queue", "music-queue-symbolic"
+        )
 
         # Connect Signals
         self.player.connect("metadata-changed", self.on_metadata_changed)
@@ -259,8 +272,19 @@ class ExpandedPlayer(Gtk.Box):
         self.player.connect("volume-changed", self.on_volume_changed)
 
         # Initial state sync
-        self._is_buffering_spinner = False
         self.on_state_changed(self.player, self.player.get_state_string())
+
+    def set_compact_mode(self, compact):
+        """
+        True: Mobile mode (tabbed view with Player/Queue)
+        False: Desktop mode (Player view only, queue is in sidebar)
+        """
+        self.switcher.set_visible(compact)
+        if not compact:
+            self.view_stack.set_visible_child_name("player")
+            self.set_margin_top(12) # Less padding on desktop
+        else:
+            self.set_margin_top(32)
 
     def _on_map(self, widget):
         GLib.idle_add(self._center_carousel)
@@ -435,7 +459,7 @@ class ExpandedPlayer(Gtk.Box):
             return
 
         if (
-            self._is_buffering_spinner
+            getattr(self, "_is_buffering_spinner", False)
             and self.player.duration <= 0
             and state in ("paused", "stopped")
         ):
@@ -464,13 +488,13 @@ class ExpandedPlayer(Gtk.Box):
 
         # Update Icon
         if muted or volume == 0:
-            self.vol_icon.set_from_icon_name("audio-volume-muted-symbolic")
+            self.vol_btn.set_icon_name("audio-volume-muted-symbolic")
         elif volume < 0.33:
-            self.vol_icon.set_from_icon_name("audio-volume-low-symbolic")
+            self.vol_btn.set_icon_name("audio-volume-low-symbolic")
         elif volume < 0.66:
-            self.vol_icon.set_from_icon_name("audio-volume-medium-symbolic")
+            self.vol_btn.set_icon_name("audio-volume-medium-symbolic")
         else:
-            self.vol_icon.set_from_icon_name("audio-volume-high-symbolic")
+            self.vol_btn.set_icon_name("audio-volume-high-symbolic")
 
     def _on_artist_btn_clicked(self, btn):
         if self.on_artist_click:
