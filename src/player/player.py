@@ -50,6 +50,7 @@ class Player(GObject.Object):
         self.player.set_property("flags", flags & ~(1 << 0))
 
         self.ydl_opts = {
+            "js_runtimes": {"node": {}},
             "format": "bestaudio/best",
             "quiet": True,
             "noplaylist": True,
@@ -865,9 +866,11 @@ class Player(GObject.Object):
                     # 3. Save to cache
                     cache_dir = os.path.join(GLib.get_user_cache_dir(), "mixtapes")
                     os.makedirs(cache_dir, exist_ok=True)
-                    
+
                     # Cleanup old art files to prevent bloat and cache issues
-                    for old_art in glob.glob(os.path.join(cache_dir, "mpris_art_*.jpg")):
+                    for old_art in glob.glob(
+                        os.path.join(cache_dir, "mpris_art_*.jpg")
+                    ):
                         try:
                             os.remove(old_art)
                         except:
@@ -875,7 +878,9 @@ class Player(GObject.Object):
 
                     # Use unique filename per track to bypass MPRIS client caching
                     safe_video_id = video_id.replace("-", "_").replace(".", "_")
-                    target_path = os.path.join(cache_dir, f"mpris_art_{safe_video_id}.jpg")
+                    target_path = os.path.join(
+                        cache_dir, f"mpris_art_{safe_video_id}.jpg"
+                    )
 
                     pixbuf.savev(target_path, "jpeg", ["quality"], ["90"])
                     self.mpris_art_url = f"file://{target_path}"
