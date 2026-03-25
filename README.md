@@ -1,3 +1,8 @@
+<picture align="left" alt="Project logo">
+  <source media="(prefers-color-scheme: dark)" srcset="screenshots/omori-mixtape-dark.png" />
+  <source media="(prefers-color-scheme: light)" srcset="screenshots/omori-mixtape.png" />
+</picture>
+
 # Mixtapes
 
 A modern, Linux-first YouTube Music player.
