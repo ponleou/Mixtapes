@@ -80,7 +80,7 @@ This is a list of all the features that are planned for Mixtapes:
   - ✅️ Artist Play button
   - ✅️ Artist Shuffle button
   - ✅️ Artist Subscribe/Unsubscribe button
-- ☑️ **Playlist Page**: View and play playlists.
+- ✅️ **Playlist Page**: View and play playlists.
   - ✅️ Basic playlist info.
   - ✅️ Playlist tracks.
   - ✅️ Playlist Play button
