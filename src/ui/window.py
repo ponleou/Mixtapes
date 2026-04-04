@@ -44,8 +44,9 @@ class MainWindow(Adw.ApplicationWindow):
 
         # Menu (About/Preferences)
         menu = Gio.Menu()
-        menu.append("Preferences", "win.preferences")  # Changed to win.
-        menu.append("About Mixtapes", "win.about")  # Changed to win.
+        menu.append("Preferences", "win.preferences")
+        menu.append("About Mixtapes", "win.about")
+        menu.append("Quit", "win.quit")
 
         menu_btn = Gtk.MenuButton()
         menu_btn.set_icon_name("open-menu-symbolic")
@@ -80,8 +81,34 @@ class MainWindow(Adw.ApplicationWindow):
         self.title_bin.set_child(self.switcher)
         self.header_bar.set_title_widget(self.title_bin)
 
-        # Add Menu Button
+        # Upload progress button (pie chart, hidden by default)
+        self._upload_progress_btn = Gtk.MenuButton()
+        self._upload_progress_btn.add_css_class("flat")
+        self._upload_progress_btn.set_tooltip_text("Upload Progress")
+        self._upload_progress_btn.set_visible(False)
+
+        self._upload_progress_fraction = 0.0
+        self._pie_area = Gtk.DrawingArea()
+        self._pie_area.set_size_request(16, 16)
+        self._pie_area.set_halign(Gtk.Align.CENTER)
+        self._pie_area.set_valign(Gtk.Align.CENTER)
+        self._pie_area.set_draw_func(self._draw_upload_pie)
+        self._upload_progress_btn.set_child(self._pie_area)
+
+        upload_popover = Gtk.Popover()
+        upload_popover.set_size_request(300, -1)
+        popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        popover_box.set_margin_top(8)
+        popover_box.set_margin_bottom(8)
+        popover_box.set_margin_start(8)
+        popover_box.set_margin_end(8)
+        self._upload_queue_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        popover_box.append(self._upload_queue_box)
+        upload_popover.set_child(popover_box)
+        self._upload_progress_btn.set_popover(upload_popover)
+
         self.header_bar.pack_end(menu_btn)
+        self.header_bar.pack_end(self._upload_progress_btn)
 
         # Search Button (Mobile/Contextual) - Toggle
         self.search_btn = Gtk.ToggleButton(icon_name="system-search-symbolic")
@@ -419,6 +446,32 @@ class MainWindow(Adw.ApplicationWindow):
             return nav
         return None
 
+    def _draw_upload_pie(self, area, cr, width, height):
+        import math
+        cx, cy = width / 2, height / 2
+        radius = min(cx, cy) - 1
+        frac = self._upload_progress_fraction
+
+        # Background circle
+        style = area.get_style_context()
+        color = style.lookup_color("theme_fg_color")
+        if color[0]:
+            cr.set_source_rgba(color[1].red, color[1].green, color[1].blue, 0.3)
+        else:
+            cr.set_source_rgba(1, 1, 1, 0.3)
+        cr.arc(cx, cy, radius, 0, 2 * math.pi)
+        cr.fill()
+
+        # Progress pie
+        if color[0]:
+            cr.set_source_rgba(color[1].red, color[1].green, color[1].blue, 1.0)
+        else:
+            cr.set_source_rgba(1, 1, 1, 1.0)
+        cr.move_to(cx, cy)
+        cr.arc(cx, cy, radius, -math.pi / 2, -math.pi / 2 + frac * 2 * math.pi)
+        cr.close_path()
+        cr.fill()
+
     def setup_actions(self):
         # About Action
         action = Gio.SimpleAction.new("about", None)
@@ -430,11 +483,33 @@ class MainWindow(Adw.ApplicationWindow):
         pref_action.connect("activate", self.show_preferences)
         self.add_action(pref_action)
 
+        # Quit Action (force quit even with songs in queue)
+        quit_action = Gio.SimpleAction.new("quit", None)
+        quit_action.connect("activate", self._on_force_quit)
+        self.add_action(quit_action)
+
+        # Intercept window close to hide instead of quit when playing
+        self.connect("close-request", self._on_close_request)
+
+    def _on_close_request(self, window):
+        """Hide window instead of quitting if there are songs in the queue."""
+        if self.player.queue and self.player.current_queue_index >= 0:
+            self.set_visible(False)
+            return True  # Prevent default close
+        return False  # Allow normal close
+
+    def _on_force_quit(self, action, param):
+        """Force quit the application."""
+        self.player.stop()
+        app = self.get_application()
+        if app:
+            app.quit()
+
     def show_about(self, action, param):
         about = Adw.AboutDialog()
         about.set_application_name("Mixtapes")
         about.set_developer_name("POCOGuy")
-        about.set_version("alpha 202603162324")
+        about.set_version("2026-04-04.0")
         about.set_website("https://www.pocoguy.com/")
         about.set_copyright("© 2026 POCOGuy")
         about.set_license_type(Gtk.License.GPL_3_0)
@@ -745,6 +820,11 @@ class MainWindow(Adw.ApplicationWindow):
         pass
 
     def open_artist(self, channel_id, initial_name=None):
+        # Uploaded artists can't be opened as regular artists
+        if channel_id and channel_id.startswith("FEmusic_library_privately_owned"):
+            self._open_upload_artist(channel_id, initial_name or "Artist")
+            return
+
         # Close search bar when navigating to a detail page
         if self.search_bar.get_search_mode():
             self.search_bar.set_search_mode(False)
@@ -853,19 +933,39 @@ class MainWindow(Adw.ApplicationWindow):
         cat_page.load_category(params, title)
 
     def on_player_bar_artist_click(self):
-        pass
+        # Try to get artist ID from the current queue track's data first
+        idx = self.player.current_queue_index
+        if 0 <= idx < len(self.player.queue):
+            track = self.player.queue[idx]
+            artists = track.get("artists", [])
+            if artists and isinstance(artists, list):
+                artist = artists[0]
+                if isinstance(artist, dict) and artist.get("id"):
+                    aid = artist["id"]
+                    name = artist.get("name", "Artist")
+                    # Upload artists can't be opened as regular artists
+                    if aid.startswith("FEmusic_library_privately_owned"):
+                        self._open_upload_artist(aid, name)
+                    else:
+                        self.open_artist(aid, name)
+                    return
 
-        print("Player Bar Artist Clicked")
-        video_id = self.player.current_video_id
-        if video_id:
-            # We need to fetch details to get channel ID if we don't have it.
-            # Or if we have simple implementation: search for artist name?
-            # Better: fetch song details.
-            pass
-            # I'll implement a quick fetch in a thread
-            import threading
+        # Fallback: resolve via get_song API (won't work for uploaded songs)
+        vid = self.player.current_video_id
+        if vid:
+            threading.Thread(target=self._resolve_artist_from_player, daemon=True).start()
 
-            threading.Thread(target=self._resolve_artist_from_player).start()
+    def _open_upload_artist(self, browse_id, name):
+        """Open an uploaded artist as a pseudo-playlist."""
+        if hasattr(self, "uploads_page"):
+            # Use the UploadsPage's artist handler
+            self.uploads_page._on_artist_activated(None, type('Row', (), {
+                'artist_data': {'browseId': browse_id, 'artist': name}
+            })())
+        elif hasattr(self, "library_page") and hasattr(self.library_page, "uploads_page"):
+            self.library_page.uploads_page._on_artist_activated(None, type('Row', (), {
+                'artist_data': {'browseId': browse_id, 'artist': name}
+            })())
 
     def _resolve_artist_from_player(self):
         vid = self.player.current_video_id
@@ -879,7 +979,6 @@ class MainWindow(Adw.ApplicationWindow):
         if song_data and "videoDetails" in song_data:
             channel_id = song_data["videoDetails"].get("channelId")
             if channel_id:
-                # Open on main thread
                 artist_name = song_data["videoDetails"].get("author", "Artist")
                 GObject.idle_add(self.open_artist, channel_id, artist_name)
 
@@ -961,12 +1060,29 @@ class MainWindow(Adw.ApplicationWindow):
         from ui.login import LoginDialog
 
         client = MusicClient()
-        # Check if auth file exists AND is valid
-        if not client.is_authenticated() or not client.validate_session():
-            print("Authentication missing or invalid. Showing login dialog.")
-            # Show login dialog
-            # We need to do this after the window is shown or using a timeout
+
+        # If no auth file at all, show login immediately
+        if not client.is_authenticated():
+            print("Authentication missing. Showing login dialog.")
             GObject.timeout_add(500, lambda: self.show_login(LoginDialog))
+            return
+
+        # Validate session in background to avoid blocking the window
+        def _validate():
+            valid = client.validate_session()
+            if not valid:
+                client._is_authed = False
+                GLib.idle_add(self._on_auth_invalid)
+
+        def _on_done():
+            pass
+
+        threading.Thread(target=_validate, daemon=True).start()
+
+    def _on_auth_invalid(self):
+        from ui.login import LoginDialog
+        print("Authentication invalid. Showing login dialog.")
+        self.show_login(LoginDialog)
 
     def show_login(self, dialog_cls):
         dialog = dialog_cls(self)
@@ -982,7 +1098,8 @@ class MainWindow(Adw.ApplicationWindow):
     def _on_mobile_breakpoint_apply(self, *args):
         print(f"[DEBUG-UI] Mobile breakpoint apply. Width: {self.get_width()}")
         self._is_compact = True
-        
+        self.add_css_class("compact")
+
         # Hide tabs, show title
         if hasattr(self, "title_bin") and hasattr(self, "title_widget"):
             self.title_bin.set_child(self.title_widget)
@@ -1006,7 +1123,8 @@ class MainWindow(Adw.ApplicationWindow):
     def _on_mobile_breakpoint_unapply(self, *args):
         print(f"[DEBUG-UI] Mobile breakpoint unapply. Width: {self.get_width()}")
         self._is_compact = False
-        
+        self.remove_css_class("compact")
+
         # Show tabs, hide title
         if hasattr(self, "title_bin") and hasattr(self, "switcher"):
             self.title_bin.set_child(self.switcher)

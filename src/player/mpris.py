@@ -23,6 +23,20 @@ class MuseMprisAdapter(MprisAdapter):
         self.player.stop()
 
     def can_raise(self) -> bool:
+        return True
+
+    def set_raise(self, value: bool):
+        from gi.repository import GLib
+        GLib.idle_add(self._do_raise)
+
+    def _do_raise(self):
+        from gi.repository import Gtk
+        app = Gtk.Application.get_default()
+        if app:
+            win = app.get_active_window()
+            if win:
+                win.set_visible(True)
+                win.present()
         return False
 
     def can_fullscreen(self) -> bool:

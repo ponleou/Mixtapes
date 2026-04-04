@@ -56,12 +56,12 @@ This is a list of all the features that are planned for Mixtapes:
 ❎️ means the feature will likely not be implemented.
 
 - ✅️ **Authentication**: Connect to YouTube Music (Browser cookies).
-- ☑️ **Library**: Access your playlists and liked songs.
+- ✅️ **Library**: Access your playlists and liked songs.
   - ✅️ Playlists
   - ✅️ Liked songs
   - ✅️ Artists
-  - 🔜 Albums
-  - 🔜 Uploads
+  - ✅️ Albums
+  - ✅️ Uploads
 - ✅️ **Search**: Search for songs, albums, and artists.
 - ☑️ **Exploration**: Ways to discover new music.
   - ✅️ New Releases
@@ -70,14 +70,13 @@ This is a list of all the features that are planned for Mixtapes:
   - ✅️ Trending
   - 🔜 Charts
   - 🔜 Home Page
-- ☑️ **Artist Page**: View artist details and discography.
+- ✅️ **Artist Page**: View artist details and discography.
   - ✅️ Basic artist info.
-  - 🔜 Artist related artists.
+  - ✅️ Artist related artists.
   - ✅️ Artist top tracks.
   - ✅️ Artist albums.
   - ✅️ Artist singles/EPs.
-  - ☑️ Artist videos.
-    > Only the first 10 videos are shown, "Show more" in fact doesn't show any more videos yet.
+  - ✅️ Artist videos.
   - ✅️ Artist Play button
   - ✅️ Artist Shuffle button
   - ✅️ Artist Subscribe/Unsubscribe button
@@ -87,7 +86,7 @@ This is a list of all the features that are planned for Mixtapes:
   - ✅️ Playlist Play button
   - ✅️ Playlist Shuffle button
   - ✅️ Playlist Order
-  - ☑️ Playlist Reorder
+  - ✅️ Playlist Multi-Selection Editing
   - ✅️ Playlist Cover Change
   - ✅️ Playlist Change Visibility
   - ✅️ Playlist Change Description
@@ -106,9 +105,8 @@ This is a list of all the features that are planned for Mixtapes:
     - ✅️ Shuffle
     - ✅️ Repeat modes (single track, loop queue)
   - ✅️ Volume control
-- 🔜 **Caching**: Cache data to reduce latency and bandwidth usage
+- ✅️ **Caching**: Cache data to reduce latency.
 - ☑️ **Responsive Design**: Mobile-friendly layout with adaptive UI.
-  > Desktop needs to use the empty space better.
 - ✅️ **MPRIS Support**: Control playback from system media controls.
 - 🔜 **Cover Art Tint**: Tint libadwaita to match the cover art of the current song, kinda like Material You.
 - 🔜 **Discord RPC**: Show your current track on Discord.
@@ -116,11 +114,11 @@ This is a list of all the features that are planned for Mixtapes:
 - ☑️ **Settings**: Configure app preferences (theme, audio quality, etc.).
   > There isn't much to configure yet.
 - 🔜 **Download Support**: Download tracks for offline playback, even as local files.
-- 🔜 **Radio / Mixes**: Start a radio station from a song or artist.
+- ✅️ **Radio / Mixes**: Start a radio station from a song or artist.
 - 🔜 **Windows/macOS**: Builds for macOS and Windows
   > Requires quite a bit of tinkering, not my highest priority
 - ✅️ **Dedicated Data Directory**: Move all the data like cookies, cache, etc. to a dedicated directory instead of the project root directory.
-- 🔜 **Background Playback**: Play music in the background, even when the main window is closed.
+- ✅️ **Background Playback**: Play music in the background, even when the main window is closed.
 - ☑️ **Flatpak**: Package Mixtapes as a Flatpak.
   - ✅️ Flatpak build
   - ☑️ Flathub release

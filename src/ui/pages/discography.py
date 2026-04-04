@@ -149,36 +149,33 @@ class DiscographyPage(Adw.Bin):
             try:
                 new_items = []
                 if self.browse_id and "Top Songs" in self.title:
-                    # Note: We likely won't use DiscographyPage for Top Songs since it's a list, not a grid
                     pass
                 elif self.browse_id and self.params:
-                    # For albums and singles
+                    # Albums, singles, videos — get_artist_albums with raw parser fallback
                     new_items = self.client.get_artist_albums(
                         self.browse_id, self.params, limit=100
                     )
-
-                    if len(new_items) < 100:
-                        self._has_more = False
-                    else:
-                        self._has_more = False
-                elif self.browse_id and not self.params:
-                    # For videos (which is a playlist)
-                    res = self.client.get_playlist(self.browse_id)
-                    new_items = res.get("tracks", [])
+                    self._has_more = False
+                elif self.browse_id:
+                    # Fallback: try as playlist, then raw parse
+                    try:
+                        res = self.client.get_playlist(self.browse_id)
+                        new_items = res.get("tracks", []) if res else []
+                    except Exception:
+                        new_items = self.client._raw_parse_channel_content(self.browse_id, None)
                     self._has_more = False
 
                 def update_cb():
                     if new_items:
                         # Filter out items we already have
-                        existing_ids = {
-                            item.get("browseId")
-                            for item in self.items
-                            if item.get("browseId")
-                        }
+                        existing_ids = set()
+                        for item in self.items:
+                            for key in ("browseId", "videoId", "playlistId"):
+                                if item.get(key):
+                                    existing_ids.add(item[key])
                         filtered_items = [
-                            item
-                            for item in new_items
-                            if item.get("browseId") not in existing_ids
+                            item for item in new_items
+                            if not any(item.get(k) in existing_ids for k in ("browseId", "videoId", "playlistId") if item.get(k))
                         ]
 
                         self.items.extend(filtered_items)

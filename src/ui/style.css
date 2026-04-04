@@ -49,13 +49,14 @@ listview.playlist-view > row:focus:selected {
 }
 
 .read-more-link {
-  padding: 0;
+  padding: 2px 0;
   min-height: 0;
   min-width: 0;
-  color: white;
+  color: @accent_color;
   font-size: 0.85em;
-  text-decoration: underline;
 }
+
+
 
 /* List View Reset */
 listview.playlist-view,
@@ -89,6 +90,11 @@ listview.playlist-view box.song-row:hover {
   background-color: @row_hover;
 }
 
+/* Selected indicator (multi-select) */
+box.song-row.selected {
+  background-color: @row_selected;
+}
+
 /* Playing indicator */
 box.song-row.playing {
   color: @playing_fg;
@@ -99,10 +105,18 @@ box.song-row.playing label {
   color: @playing_fg;
 }
 
+/* Reset color for context menu popovers so they don't inherit playing color */
+box.song-row.playing popover label,
+box.song-row.playing popover modelbutton,
+popover.menu label,
+popover.menu modelbutton {
+  color: @theme_fg_color;
+}
+
 /* Image scaling */
 picture.song-img {
-  min-width: 44px; /* Slightly smaller for 56px row */
-  min-height: 44px;
+  min-width: 56px;
+  min-height: 56px;
   border-radius: 6px;
 }
 
@@ -113,8 +127,8 @@ picture.song-img {
 }
 
 .compact picture.song-img {
-  min-width: 32px;
-  min-height: 32px;
+  min-width: 44px;
+  min-height: 44px;
 }
 
 .compact box.song-row label {

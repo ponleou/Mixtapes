@@ -137,6 +137,15 @@ class ArtistPage(Adw.Bin):
         self.shuffle_btn.connect("clicked", self.on_shuffle_clicked)
         actions.append(self.shuffle_btn)
 
+        self.radio_btn = Gtk.Button()
+        self.radio_btn.set_icon_name("triangular-antenna-symbolic")
+        self.radio_btn.add_css_class("circular")
+        self.radio_btn.set_valign(Gtk.Align.CENTER)
+        self.radio_btn.set_size_request(48, 48)
+        self.radio_btn.set_tooltip_text("Start Radio")
+        self.radio_btn.connect("clicked", self.on_radio_clicked)
+        actions.append(self.radio_btn)
+
         self.subscribe_btn = Gtk.Button()
         self.subscribe_btn.set_icon_name("non-starred-symbolic")
         self.subscribe_btn.add_css_class("circular")
@@ -158,13 +167,13 @@ class ArtistPage(Adw.Bin):
         self.description_label.set_ellipsize(Pango.EllipsizeMode.NONE)
         self.description_label.set_margin_top(12)
 
-        self.read_more_btn = Gtk.Button(label="Read more")
-        self.read_more_btn.add_css_class("flat")
-        self.read_more_btn.add_css_class("read-more-link")
+        self.read_more_btn = Gtk.Label()
+        self.read_more_btn.set_use_markup(True)
+        self.read_more_btn.set_markup("<a href='toggle'>Read more</a>")
+        self.read_more_btn.add_css_class("caption")
         self.read_more_btn.set_halign(Gtk.Align.START)
         self.read_more_btn.set_visible(False)
-        self.read_more_btn.set_cursor(Gdk.Cursor.new_from_name("pointer"))
-        self.read_more_btn.connect("clicked", self._on_read_more_toggle)
+        self.read_more_btn.connect("activate-link", self._on_read_more_link)
         self._description_expanded = False
 
         self.description_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -193,6 +202,7 @@ class ArtistPage(Adw.Bin):
         loading_box.set_halign(Gtk.Align.CENTER)
 
         self.spinner = Adw.Spinner()
+        self.spinner.set_size_request(32, 32)
         loading_box.append(self.spinner)
 
         self.stack.add_named(loading_box, "loading")
@@ -215,6 +225,60 @@ class ArtistPage(Adw.Bin):
     def _fetch_artist(self, channel_id):
         try:
             self._artist_data = self.client.get_artist(channel_id)
+
+            # Fetch missing sections (playlists, featured on, live) from raw API
+            if self._artist_data and not self._artist_data.get("_is_channel"):
+                try:
+                    raw = self.client.api._send_request("browse", {"browseId": channel_id})
+                    tabs = raw.get("contents", {}).get("singleColumnBrowseResultsRenderer", {}).get("tabs", [])
+                    if tabs:
+                        sections = tabs[0].get("tabRenderer", {}).get("content", {}).get("sectionListRenderer", {}).get("contents", [])
+                        for section in sections:
+                            for rkey in ["musicCarouselShelfRenderer"]:
+                                r = section.get(rkey, {})
+                                if not r:
+                                    continue
+                                title = ""
+                                browse_id = None
+                                params = None
+                                for hk in r.get("header", {}):
+                                    hr = r["header"][hk]
+                                    if isinstance(hr, dict):
+                                        runs = hr.get("title", {}).get("runs", [])
+                                        if runs:
+                                            title = runs[0].get("text", "")
+                                        # Get browse endpoint for "View All"
+                                        more_ep = hr.get("moreContentButton", {}).get("buttonRenderer", {}).get("navigationEndpoint", {}).get("browseEndpoint", {})
+                                        if more_ep.get("browseId"):
+                                            browse_id = more_ep["browseId"]
+                                            params = more_ep.get("params")
+                                # Add sections that ytmusicapi misses
+                                if title and "playlist" in title.lower() and "playlists" not in self._artist_data:
+                                    items = []
+                                    for raw_item in r.get("contents", []):
+                                        parsed = self.client._parse_channel_item(raw_item)
+                                        if parsed:
+                                            items.append(parsed)
+                                    if items:
+                                        self._artist_data["playlists"] = {
+                                            "results": items,
+                                            "browseId": browse_id,
+                                            "params": params,
+                                        }
+                                elif title and "featured" in title.lower() and "featured_on" not in self._artist_data:
+                                    items = []
+                                    for raw_item in r.get("contents", []):
+                                        parsed = self.client._parse_channel_item(raw_item)
+                                        if parsed:
+                                            items.append(parsed)
+                                    if items:
+                                        self._artist_data["featured_on"] = {
+                                            "results": items,
+                                            "browseId": browse_id,
+                                            "params": params,
+                                        }
+                except Exception:
+                    pass
 
             # Deep fetch sections that are usually truncated (Albums, Singles, EPs)
             # This ensures we get high-quality metadata (year, type, explicit) from the start.
@@ -298,7 +362,7 @@ class ArtistPage(Adw.Bin):
             if len(clean) > 280:
                 preview = clean[:280].rsplit(" ", 1)[0] + "…"
                 self.description_label.set_label(preview)
-                self.read_more_btn.set_label("Read more")
+                self.read_more_btn.set_markup("<a href='toggle'>Read more</a>")
                 self.read_more_btn.set_visible(True)
             else:
                 self.description_label.set_label(clean)
@@ -332,8 +396,22 @@ class ArtistPage(Adw.Bin):
 
         self._update_subscribe_button()
 
+        # Store radio/shuffle IDs for the action buttons
+        self._radio_id = data.get("radioId")
+        self._shuffle_id = data.get("shuffleId")
+
+        # Hide play/shuffle/radio for channels (no songs)
+        is_channel = data.get("_is_channel", False)
+        self.play_btn.set_visible(not is_channel)
+        self.shuffle_btn.set_visible(not is_channel)
+        self.radio_btn.set_visible(not is_channel and bool(self._radio_id))
+
+        # Use banner for the header image if available, otherwise avatar/thumbnail
+        banner = data.get("banner", [])
         thumbnails = data.get("thumbnails", [])
-        if thumbnails:
+        if banner:
+            self.avatar.load_url(banner[-1]["url"])
+        elif thumbnails:
             self.avatar.load_url(thumbnails[-1]["url"])
 
         # Determine if we are updating or doing a fresh load
@@ -362,6 +440,27 @@ class ArtistPage(Adw.Bin):
         # Videos
         if "videos" in data:
             self.add_grid_section("Videos", data["videos"])
+
+        # Playlists
+        if "playlists" in data:
+            playlists = data["playlists"]
+            # get_user returns {"browseId": ..., "results": [...]}
+            if isinstance(playlists, dict) and playlists.get("results"):
+                self.add_grid_section("Playlists", playlists)
+            elif isinstance(playlists, list) and playlists:
+                self.add_grid_section("Playlists", {"results": playlists})
+
+        # Featured on
+        if "featured_on" in data:
+            self.add_grid_section("Featured On", data["featured_on"])
+
+        # Fans might also like (related artists)
+        if "related" in data:
+            related = data["related"]
+            if isinstance(related, dict) and related.get("results"):
+                self.add_grid_section("Fans Might Also Like", related)
+            elif isinstance(related, list) and related:
+                self.add_grid_section("Fans Might Also Like", {"results": related})
 
     def add_songs_section(self, title, section_dict):
         items = section_dict.get("results", [])
@@ -411,12 +510,14 @@ class ArtistPage(Adw.Bin):
 
             img = AsyncPicture(
                 url=thumb_url,
-                target_size=44,
+                target_size=56,
                 crop_to_square=True,
                 player=self.player,
             )
             img.video_id = item.get("videoId")
             img.add_css_class("song-img")
+            root = self.get_root()
+            img.set_compact(getattr(root, '_is_compact', False) if root else False)
             box.append(img)
 
             song_title = item.get("title", "Unknown")
@@ -772,15 +873,18 @@ class ArtistPage(Adw.Bin):
             params = section_dict.get("params")
             browse_id = section_dict.get("browseId")
 
+            if not browse_id:
+                # No browseId — show all results inline
+                self._section_limits[title] = len(results)
+                self.update_ui(self._artist_data)
+                return
+
             # Find the main window to call context navigation
             window = self.get_root()
             if hasattr(window, "open_discography"):
-                # Title e.g. "Artist Name - Albums"
                 page_title = f"{self.artist_name} - {title}"
-                # If we have more than the limit, pass the full existing loaded results as initial items
-                initial_items = results if len(results) > limit else results[:limit]
                 window.open_discography(
-                    self.channel_id, page_title, browse_id, params, initial_items
+                    self.channel_id, page_title, browse_id, params, None
                 )
             return
 
@@ -1068,15 +1172,20 @@ class ArtistPage(Adw.Bin):
         self.on_load_more_clicked(None, title, section_dict, None, None)
 
     def on_grid_child_activated(self, flowbox, child):
-        # Handle both FlowBox child and direct Box items
         item_box = child.get_child() if hasattr(child, "get_child") else child
         if hasattr(item_box, "item_data"):
             data = item_box.item_data
+            pid = data.get("browseId") or data.get("playlistId")
             if "videoId" in data:
                 self.player.play_tracks([data])
-            elif "browseId" in data:
+            elif pid and pid.startswith("UC"):
+                # Artist browse ID — open artist page
+                root = self.get_root()
+                if root and hasattr(root, "open_artist"):
+                    root.open_artist(pid, data.get("title"))
+            elif pid:
                 self.open_playlist_callback(
-                    data["browseId"],
+                    pid,
                     {
                         "title": data.get("title"),
                         "thumb": data.get("thumbnails", [])[-1]["url"]
@@ -1123,17 +1232,41 @@ class ArtistPage(Adw.Bin):
         if hasattr(self, "current_songs") and self.current_songs:
             self.player.set_queue(self._build_queue_tracks(), -1, shuffle=True)
 
-    def _on_read_more_toggle(self, btn):
+    def on_radio_clicked(self, btn):
+        radio_id = getattr(self, '_radio_id', None)
+        if radio_id:
+            self.player.start_radio(playlist_id=radio_id)
+        elif hasattr(self, "current_songs") and self.current_songs:
+            # Fallback: start radio from the first song
+            first_vid = self.current_songs[0].get("videoId")
+            if first_vid:
+                self.player.start_radio(video_id=first_vid)
+
+    def _on_read_more_link(self, label, uri):
+        GLib.idle_add(self._toggle_description)
+        return True
+
+    def _toggle_description(self):
         self._description_expanded = not self._description_expanded
         if self._description_expanded:
             self.description_label.set_label(self._description_clean)
             self.description_label.set_lines(0)
-            self.read_more_btn.set_label("Read less")
+            text = "Show less"
         else:
             preview = self._description_clean[:280].rsplit(" ", 1)[0] + "…"
             self.description_label.set_label(preview)
             self.description_label.set_lines(3)
-            self.read_more_btn.set_label("Read more")
+            text = "Read more"
+        parent = self.read_more_btn.get_parent()
+        parent.remove(self.read_more_btn)
+        self.read_more_btn = Gtk.Label()
+        self.read_more_btn.set_use_markup(True)
+        self.read_more_btn.set_markup(f"<a href='toggle'>{text}</a>")
+        self.read_more_btn.add_css_class("caption")
+        self.read_more_btn.set_halign(Gtk.Align.START)
+        self.read_more_btn.connect("activate-link", self._on_read_more_link)
+        parent.append(self.read_more_btn)
+        return False
 
     def on_banner_right_click(self, gesture, n_press, x, y):
         url = getattr(self.avatar, "url", None)
@@ -1161,7 +1294,18 @@ class ArtistPage(Adw.Bin):
         popover.set_pointing_to(rect)
         popover.popup()
 
+    def _propagate_compact(self, widget, compact):
+        if hasattr(widget, 'set_compact') and hasattr(widget, 'target_size'):
+            widget.set_compact(compact)
+        child = widget.get_first_child() if hasattr(widget, 'get_first_child') else None
+        while child:
+            self._propagate_compact(child, compact)
+            child = child.get_next_sibling()
+
     def set_compact_mode(self, compact):
+        self._compact = compact
+        self._propagate_compact(self.content_box, compact)
+
         if compact:
             self.add_css_class("compact")
             self.banner_overlay.set_size_request(-1, 200)

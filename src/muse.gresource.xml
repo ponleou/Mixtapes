@@ -3,5 +3,6 @@
   <gresource prefix="/com/pocoguy/muse/icons">
     <file alias="hicolor/scalable/actions/compass2-symbolic.svg" preprocess="xml-stripblanks">assets/icons/hicolor/scalable/actions/compass2-symbolic.svg</file>
     <file alias="hicolor/scalable/actions/music-queue-symbolic.svg" preprocess="xml-stripblanks">assets/icons/hicolor/scalable/actions/music-queue-symbolic.svg</file>
+    <file alias="hicolor/scalable/actions/radio-symbolic.svg" preprocess="xml-stripblanks">assets/icons/hicolor/scalable/actions/radio-symbolic.svg</file>
   </gresource>
 </gresources>

@@ -115,13 +115,21 @@ def copy_to_clipboard(text):
         print(f"[DEBUG] Copied to clipboard: {text}")
 
 
-def get_yt_music_link(item_id, is_album=False):
+def get_yt_music_link(item_id, is_album=False, audio_playlist_id=None):
     """
     Constructs a YouTube Music link for a playlist or album.
+    Albums use /playlist?list=OLAK... (the audio playlist ID).
+    MPRE browse IDs are internal and not shareable.
     """
     if not item_id:
         return ""
-    if is_album or item_id.startswith("MPRE") or item_id.startswith("OLAK"):
+    if item_id.startswith("OLAK"):
+        return f"https://music.youtube.com/playlist?list={item_id}"
+    if is_album or item_id.startswith("MPRE"):
+        # MPRE is a browse ID, not a shareable URL.
+        # Use the audio_playlist_id if available, otherwise fall back to browse URL.
+        if audio_playlist_id:
+            return f"https://music.youtube.com/playlist?list={audio_playlist_id}"
         return f"https://music.youtube.com/browse/{item_id}"
     return f"https://music.youtube.com/playlist?list={item_id}"
 
@@ -447,6 +455,25 @@ class AsyncPicture(Gtk.Picture):
             self._is_placeholder = True
             if url:
                 self.load_url(url)
+
+    def do_measure(self, orientation, for_size):
+        """Clamp natural size so the texture doesn't inflate the parent.
+        Uses _current_size which is updated by set_compact()."""
+        minimum, natural, min_baseline, nat_baseline = Gtk.Picture.do_measure(
+            self, orientation, for_size
+        )
+        size = getattr(self, '_current_size', self.target_size)
+        if size and natural > size:
+            natural = size
+            minimum = min(minimum, size)
+        return minimum, natural, -1, -1
+
+    def set_compact(self, compact):
+        """Switch between desktop and mobile sizing."""
+        if self.target_size:
+            self._current_size = 44 if compact else self.target_size
+            self.set_size_request(self._current_size, self._current_size)
+            self.queue_resize()
 
     def set_from_icon_name(self, icon_name):
         if not icon_name:

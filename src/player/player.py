@@ -4,12 +4,14 @@ import random
 import os
 
 gi.require_version("Gst", "1.0")
-from gi.repository import Gst, GObject, GLib, GdkPixbuf
+gi.require_version("GstAudio", "1.0")
+from gi.repository import Gst, GstAudio, GObject, GLib, GdkPixbuf
 import glob
 from yt_dlp import YoutubeDL
 from mprisify.server import Server
 from ui.utils import get_high_res_url, get_ytimg_fallbacks
 from player.mpris import MuseMprisAdapter, MuseEventAdapter
+from player.cache import StreamCache
 from api.client import MusicClient
 
 
@@ -56,15 +58,14 @@ class Player(GObject.Object):
             "extractor_args": {
                 "youtube": {
                     "player_client": [
-                        "tv",
-                        "mweb",
                         "web_music",
+                        "mweb",
+                        "tv",
                         "web_safari",
                         "android_vr",
                         "android",
                         "ios",
                     ],
-                    "webpage_skip": ["player_response", "initial_data"],
                 }
             },
         }
@@ -72,6 +73,11 @@ class Player(GObject.Object):
         self.bus = self.player.get_bus()
         self.bus.add_signal_watch()
         self.bus.connect("message", self.on_message)
+
+        # Listen for external volume changes (system mixer)
+        self.player.connect("notify::volume", self._on_external_volume_change)
+        self.player.connect("notify::mute", self._on_external_mute_change)
+        self._internal_volume_change = False
 
         self.current_video_id = None
 
@@ -93,6 +99,11 @@ class Player(GObject.Object):
         self.queue_source_id = None
         self.queue_is_infinite = False
         self._is_fetching_infinite = False
+
+        # Audio snippet cache
+        self.stream_cache = StreamCache()
+        self._playing_from_cache = False
+        self._pending_stream_url = None
 
         # Timer for progress
         GObject.timeout_add(100, self.update_position)
@@ -155,6 +166,35 @@ class Player(GObject.Object):
     def play_tracks(self, tracks):
         """Sets the queue to the given tracks and starts playback of the first one."""
         self.set_queue(tracks, 0)
+
+    def start_radio(self, video_id=None, playlist_id=None):
+        """Start a radio (mix) from a song or playlist. Runs in background."""
+        def _fetch():
+            try:
+                data = self.client.get_watch_playlist(
+                    video_id=video_id, playlist_id=playlist_id, limit=50, radio=True
+                )
+                tracks = data.get("tracks", [])
+                if tracks:
+                    # Normalize thumbnail field: watch_playlist uses 'thumbnail' not 'thumbnails'/'thumb'
+                    for t in tracks:
+                        if "thumbnail" in t and "thumbnails" not in t:
+                            t["thumbnails"] = t["thumbnail"]
+                        if t.get("thumbnails") and not t.get("thumb"):
+                            thumbs = t["thumbnails"]
+                            if isinstance(thumbs, list) and thumbs:
+                                t["thumb"] = thumbs[-1].get("url", "")
+
+                    pid = data.get("playlistId")
+                    GObject.idle_add(
+                        self.set_queue, tracks, 0, False, pid, True
+                    )
+                else:
+                    print("[RADIO] No tracks returned")
+            except Exception as e:
+                print(f"[RADIO] Error: {e}")
+
+        threading.Thread(target=_fetch, daemon=True).start()
 
     def set_queue(
         self, tracks, start_index=0, shuffle=False, source_id=None, is_infinite=False
@@ -410,7 +450,7 @@ class Player(GObject.Object):
             if isinstance(artist, list):
                 artist = ", ".join([str(a.get("name", "")) for a in artist])
 
-            artist = str(artist or "Unknown")
+            artist = str(artist or "")
 
             if not thumb and track.get("thumbnails"):
                 thumbs = track.get("thumbnails")
@@ -467,6 +507,20 @@ class Player(GObject.Object):
                 self.mpris_events.on_player_all()
             except Exception as e:
                 print(f"mpris ERROR: {e}")
+
+        # Check stream URL cache — skip yt-dlp if we have a valid cached URL
+        self._playing_from_cache = False
+        self._pending_stream_url = None
+        self._waiting_for_stream = False
+        self._swap_seek_target = None
+        self._used_cached_url = False
+        self._fallback_stream_url = None
+        self._cache_failed_waiting = False
+        cached_url = self.stream_cache.get(video_id)
+        if cached_url:
+            print(f"[CACHE] Using cached stream URL for {video_id}")
+            self._used_cached_url = True
+            GLib.idle_add(self._start_playback, cached_url)
 
         thread = threading.Thread(
             target=self._fetch_and_play,
@@ -750,7 +804,19 @@ class Player(GObject.Object):
                         os.remove(cookie_file)
                     return
 
-                GObject.idle_add(self._start_playback, stream_url)
+                # Cache the stream URL for future plays
+                self.stream_cache.put(video_id, stream_url)
+
+                if getattr(self, '_cache_failed_waiting', False):
+                    # Cached URL failed earlier, yt-dlp just finished — play now
+                    print("[CACHE] yt-dlp finished, playing after cache failure")
+                    self._cache_failed_waiting = False
+                    GObject.idle_add(self._start_playback, stream_url)
+                elif self._used_cached_url:
+                    # Store the fresh URL as fallback in case cached URL fails
+                    self._fallback_stream_url = stream_url
+                else:
+                    GObject.idle_add(self._start_playback, stream_url)
 
                 GObject.idle_add(
                     self.emit,
@@ -761,6 +827,9 @@ class Player(GObject.Object):
                     video_id,
                     like_status_hint,
                 )
+
+                # Pre-cache next songs in queue
+                self._precache_next(generation)
         except Exception as e:
             print(f"Error fetching URL: {e}")
         finally:
@@ -769,6 +838,59 @@ class Player(GObject.Object):
                     os.remove(cookie_file)
                 except:
                     pass
+
+    def _precache_next(self, generation):
+        """Pre-cache stream URLs for 3 songs ahead and 3 behind."""
+        if generation != self.load_generation:
+            return
+
+        current = self.current_queue_index
+        queue_len = len(self.queue)
+        indices = []
+        for offset in range(1, 4):
+            if current + offset < queue_len:
+                indices.append(current + offset)
+            if current - offset >= 0:
+                indices.append(current - offset)
+
+        from yt_dlp import YoutubeDL
+
+        for idx in indices:
+            if generation != self.load_generation:
+                return
+            track = self.queue[idx]
+            vid = track.get("videoId")
+            if not vid or self.stream_cache.get(vid):
+                continue
+            try:
+                url = f"https://music.youtube.com/watch?v={vid}"
+                opts = self.ydl_opts.copy()
+                opts["quiet"] = True
+                opts.pop("verbose", None)
+
+                cookie_file = None
+                if self.client.is_authenticated() and self.client.api:
+                    cookie_file = self._create_cookie_file(self.client.api.headers)
+                    if cookie_file:
+                        opts["cookiefile"] = cookie_file
+                    ua = self.client.api.headers.get("User-Agent")
+                    if ua:
+                        opts["user_agent"] = ua
+
+                with YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    stream_url = info["url"]
+                    del info
+                self.stream_cache.put(vid, stream_url)
+                print(f"[CACHE] Pre-cached stream URL for song {idx}: {vid}")
+            except Exception as e:
+                print(f"[CACHE] Pre-cache error for {vid}: {e}")
+            finally:
+                if cookie_file and os.path.exists(cookie_file):
+                    try:
+                        os.remove(cookie_file)
+                    except OSError:
+                        pass
 
     def _start_playback(self, uri, cookie_file=None):
         self.player.set_state(Gst.State.NULL)
@@ -826,6 +948,25 @@ class Player(GObject.Object):
         elif t == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
             print(f"Error: {err}, {debug}")
+
+            # If cached URL failed, try the fresh yt-dlp resolved URL
+            if self._used_cached_url:
+                fallback = getattr(self, '_fallback_stream_url', None)
+                self._used_cached_url = False
+                if fallback:
+                    print("[CACHE] Cached URL failed, using fresh URL")
+                    self._fallback_stream_url = None
+                    if self.current_video_id:
+                        self.stream_cache.put(self.current_video_id, fallback)
+                    self._start_playback(fallback)
+                    return
+                else:
+                    # yt-dlp hasn't finished yet — flag so it plays when ready
+                    print("[CACHE] Cached URL failed, waiting for yt-dlp...")
+                    self._cache_failed_waiting = True
+                    self.player.set_state(Gst.State.NULL)
+                    return
+
             self.player.set_state(Gst.State.NULL)
             self._is_loading = False
             self._update_logical_state()
@@ -991,11 +1132,24 @@ class Player(GObject.Object):
             self.mpris_events.on_seek(int(position * 1_000_000))
 
     def get_volume(self):
-        return self.player.get_property("volume")
+        """Get volume in cubic (perceptual) scale 0.0-1.0, matching system mixer."""
+        linear = self.player.get_property("volume")
+        return GstAudio.StreamVolume.convert_volume(
+            GstAudio.StreamVolumeFormat.LINEAR,
+            GstAudio.StreamVolumeFormat.CUBIC,
+            linear,
+        )
 
     def set_volume(self, value):
-        # value 0.0 to 1.0
-        self.player.set_property("volume", float(value))
+        """Set volume from cubic (perceptual) scale 0.0-1.0."""
+        linear = GstAudio.StreamVolume.convert_volume(
+            GstAudio.StreamVolumeFormat.CUBIC,
+            GstAudio.StreamVolumeFormat.LINEAR,
+            float(value),
+        )
+        self._internal_volume_change = True
+        self.player.set_property("volume", linear)
+        self._internal_volume_change = False
         if value > 0 and self.get_mute():
             self.set_mute(False)
         else:
@@ -1005,5 +1159,19 @@ class Player(GObject.Object):
         return self.player.get_property("mute")
 
     def set_mute(self, is_muted):
+        self._internal_volume_change = True
         self.player.set_property("mute", is_muted)
+        self._internal_volume_change = False
         GLib.idle_add(self.emit, "volume-changed", self.get_volume(), is_muted)
+
+    def _on_external_volume_change(self, element, param):
+        """Called when volume changes externally (system mixer)."""
+        if self._internal_volume_change:
+            return
+        GLib.idle_add(self.emit, "volume-changed", self.get_volume(), self.get_mute())
+
+    def _on_external_mute_change(self, element, param):
+        """Called when mute changes externally."""
+        if self._internal_volume_change:
+            return
+        GLib.idle_add(self.emit, "volume-changed", self.get_volume(), self.get_mute())

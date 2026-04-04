@@ -64,12 +64,24 @@ class CategoryPage(Adw.Bin):
         self.set_child(self.main_box)
 
     def set_compact_mode(self, compact):
+        self._compact = compact
+        # Propagate compact to all song row images
+        self._propagate_compact(self.content_box, compact)
+
         if compact:
             self.add_css_class("compact")
             self.content_box.set_spacing(16)
         else:
             self.remove_css_class("compact")
             self.content_box.set_spacing(32)
+
+    def _propagate_compact(self, widget, compact):
+        if hasattr(widget, 'set_compact') and hasattr(widget, 'target_size'):
+            widget.set_compact(compact)
+        child = widget.get_first_child() if hasattr(widget, 'get_first_child') else None
+        while child:
+            self._propagate_compact(child, compact)
+            child = child.get_next_sibling()
 
     def load_category(self, params, title):
         self.params = params
@@ -271,12 +283,14 @@ class CategoryPage(Adw.Bin):
 
             img = AsyncPicture(
                 url=thumb_url,
-                target_size=44,
+                target_size=56,
                 crop_to_square=True,
                 player=self.player,
             )
             img.video_id = item.get("videoId")
             img.add_css_class("song-img")
+            root = self.get_root()
+            img.set_compact(getattr(root, '_is_compact', False) if root else False)
             box.append(img)
 
             song_title = item.get("title", "Unknown")
@@ -392,6 +406,9 @@ class CategoryPage(Adw.Bin):
                 try:
                     clipboard = Gdk.Display.get_default().get_clipboard()
                     clipboard.set(url)
+                    root = self.get_root()
+                    if root and hasattr(root, "add_toast"):
+                        root.add_toast("Link copied")
                 except Exception:
                     pass
 
@@ -467,6 +484,9 @@ class CategoryPage(Adw.Bin):
                 try:
                     clipboard = Gdk.Display.get_default().get_clipboard()
                     clipboard.set(url)
+                    root = self.get_root()
+                    if root and hasattr(root, "add_toast"):
+                        root.add_toast("Link copied")
                 except Exception:
                     pass
 

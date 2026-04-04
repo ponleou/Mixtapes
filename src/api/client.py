@@ -69,9 +69,11 @@ class MusicClient:
         self._user_info = None  # Cache for account info
         self._subscribed_artists = set()  # Set of channel IDs
         self._library_playlists = []  # Cache for editable playlists
-        self.try_login()
+        self._library_playlist_ids = set()  # IDs of all library playlists
+        self._library_album_ids = set()  # Browse IDs of all library albums
+        self.try_login(skip_validation=True)
 
-    def try_login(self):
+    def try_login(self, skip_validation=False):
         # 1. Try saved headers_auth.json (Preferred)
         if os.path.exists(self.auth_path):
             try:
@@ -84,6 +86,11 @@ class MusicClient:
                 headers = self._normalize_headers(headers)
 
                 self.api = YTMusic(auth=headers)
+                if skip_validation:
+                    # Assume valid for now; caller will validate asynchronously
+                    print("Auth loaded (validation deferred).")
+                    self._is_authed = True
+                    return True
                 if self.validate_session():
                     print("Authenticated via saved session.")
                     self._is_authed = True
@@ -286,7 +293,170 @@ class MusicClient:
             return []
         playlists = self.api.get_library_playlists()
         self._library_playlists = playlists
+        self._library_playlist_ids = {
+            p.get("playlistId") for p in playlists if p.get("playlistId")
+        }
         return playlists
+
+    def get_library_albums(self, limit=100):
+        if not self.is_authenticated():
+            return []
+        try:
+            albums = self.api.get_library_albums(limit=limit)
+            self._library_album_ids = set()
+            for a in albums:
+                if a.get("browseId"):
+                    self._library_album_ids.add(a["browseId"])
+                if a.get("audioPlaylistId"):
+                    self._library_album_ids.add(a["audioPlaylistId"])
+                if a.get("playlistId"):
+                    self._library_album_ids.add(a["playlistId"])
+            return albums
+        except Exception as e:
+            print(f"Error fetching library albums: {e}")
+            return []
+
+    def is_in_library(self, playlist_id):
+        """Check if a playlist or album is saved in the user's library."""
+        if not playlist_id or not self.is_authenticated():
+            return False
+
+        # Fetch library data if not cached yet
+        if not self._library_playlist_ids:
+            try:
+                playlists = self.api.get_library_playlists()
+                self._library_playlists = playlists
+                self._library_playlist_ids = {
+                    p.get("playlistId") for p in playlists if p.get("playlistId")
+                }
+            except Exception:
+                pass
+        if not self._library_album_ids:
+            try:
+                albums = self.api.get_library_albums(limit=100)
+                self._library_album_ids = set()
+                for a in albums:
+                    if a.get("browseId"):
+                        self._library_album_ids.add(a["browseId"])
+                    if a.get("audioPlaylistId"):
+                        self._library_album_ids.add(a["audioPlaylistId"])
+                    if a.get("playlistId"):
+                        self._library_album_ids.add(a["playlistId"])
+            except Exception:
+                pass
+
+        pid = playlist_id
+        if pid.startswith("VL"):
+            pid = pid[2:]
+        # Check playlists
+        if pid in self._library_playlist_ids:
+            return True
+        # Check albums (by browseId, audioPlaylistId, or playlistId)
+        if pid in self._library_album_ids:
+            return True
+        return False
+
+    def rate_playlist(self, playlist_id, rating="LIKE"):
+        """Rate a playlist/album: 'LIKE' to save, 'INDIFFERENT' to remove from library.
+        Strips VL prefix and converts MPRE browse IDs to playlist IDs automatically."""
+        if not self.is_authenticated():
+            return False
+        try:
+            # Strip VL prefix (browse ID → playlist ID)
+            pid = playlist_id
+            if pid.startswith("VL"):
+                pid = pid[2:]
+            # Convert MPRE browse ID to audio playlist ID
+            if pid.startswith("MPRE"):
+                try:
+                    album_data = self.api.get_album(pid)
+                    pid = album_data.get("audioPlaylistId", pid)
+                except Exception:
+                    pass
+            self.api.rate_playlist(pid, rating)
+            return True
+        except Exception as e:
+            print(f"Error rating playlist: {e}")
+            return False
+
+    def edit_song_library_status(self, feedback_tokens):
+        """Add/remove songs from library using feedback tokens."""
+        if not self.is_authenticated():
+            return False
+        try:
+            self.api.edit_song_library_status(feedback_tokens)
+            return True
+        except Exception as e:
+            print(f"Error editing song library status: {e}")
+            return False
+
+    def get_library_upload_songs(self, limit=100, order=None):
+        if not self.is_authenticated():
+            return []
+        try:
+            return self.api.get_library_upload_songs(limit=limit, order=order)
+        except Exception as e:
+            print(f"Error fetching uploaded songs: {e}")
+            return []
+
+    def get_library_upload_albums(self, limit=100, order=None):
+        if not self.is_authenticated():
+            return []
+        try:
+            return self.api.get_library_upload_albums(limit=limit, order=order)
+        except Exception as e:
+            print(f"Error fetching uploaded albums: {e}")
+            return []
+
+    def get_library_upload_artists(self, limit=100, order=None):
+        if not self.is_authenticated():
+            return []
+        try:
+            return self.api.get_library_upload_artists(limit=limit, order=order)
+        except Exception as e:
+            print(f"Error fetching uploaded artists: {e}")
+            return []
+
+    def upload_song(self, filepath):
+        """Upload a song file (mp3, m4a, wma, flac, ogg) to YouTube Music."""
+        if not self.is_authenticated():
+            return None
+        try:
+            return self.api.upload_song(filepath)
+        except Exception as e:
+            print(f"Error uploading song: {e}")
+            return None
+
+    def delete_upload_entity(self, entity_id):
+        """Delete a previously uploaded song or album."""
+        if not self.is_authenticated():
+            return False
+        try:
+            self.api.delete_upload_entity(entity_id)
+            return True
+        except Exception as e:
+            print(f"Error deleting upload: {e}")
+            return False
+
+    def get_library_upload_album(self, browse_id):
+        """Get tracks for an uploaded album."""
+        if not self.is_authenticated():
+            return None
+        try:
+            return self.api.get_library_upload_album(browse_id)
+        except Exception as e:
+            print(f"Error fetching upload album: {e}")
+            return None
+
+    def get_library_upload_artist(self, browse_id, limit=100):
+        """Get uploaded songs by a specific artist."""
+        if not self.is_authenticated():
+            return []
+        try:
+            return self.api.get_library_upload_artist(browse_id, limit=limit)
+        except Exception as e:
+            print(f"Error fetching upload artist songs: {e}")
+            return []
 
     def get_library_subscriptions(self, limit=None):
         if not self.is_authenticated():
@@ -408,16 +578,232 @@ class MusicClient:
             return res
         except Exception as e:
             print(f"Error getting artist details: {e}")
+            # Fallback: try as a regular YouTube channel
+            try:
+                user_data = self.api.get_user(channel_id)
+                if user_data:
+                    # Normalize to artist-like format
+                    user_data["_is_channel"] = True
+                    if "name" in user_data and "subscribers" not in user_data:
+                        user_data["subscribers"] = ""
+                    # Fetch avatar and banner from raw API
+                    try:
+                        raw = self.api._send_request("browse", {"browseId": channel_id})
+                        header = raw.get("header", {})
+                        for hkey in ["musicVisualHeaderRenderer", "musicImmersiveHeaderRenderer"]:
+                            h = header.get(hkey, {})
+                            if h:
+                                # Avatar (foregroundThumbnail)
+                                fg = h.get("foregroundThumbnail", {}).get("musicThumbnailRenderer", {}).get("thumbnail", {}).get("thumbnails", [])
+                                if fg:
+                                    user_data["thumbnails"] = fg
+                                # Banner (thumbnail)
+                                bg = h.get("thumbnail", {}).get("musicThumbnailRenderer", {}).get("thumbnail", {}).get("thumbnails", [])
+                                if bg:
+                                    user_data["banner"] = bg
+                                # Subscriber count from subscriptionButton
+                                sub_btn = h.get("subscriptionButton", {}).get("subscribeButtonRenderer", {})
+                                sub_count = sub_btn.get("subscriberCountText", {}).get("runs", [])
+                                if sub_count:
+                                    user_data["subscribers"] = sub_count[0].get("text", "")
+                                break
+                    except Exception:
+                        pass
+                    # Fallback: use first content thumbnail if no avatar found
+                    if "thumbnails" not in user_data:
+                        for section_key in ["playlists", "videos", "songs"]:
+                            section = user_data.get(section_key, {})
+                            results = section.get("results", []) if isinstance(section, dict) else (section if isinstance(section, list) else [])
+                            if results and results[0].get("thumbnails"):
+                                user_data["thumbnails"] = results[0]["thumbnails"]
+                                break
+                    return user_data
+            except Exception as e2:
+                print(f"Error getting channel details: {e2}")
             return None
 
     def get_artist_albums(self, channel_id, params=None, limit=100):
         if not self.api:
             return []
         try:
-            return self.api.get_artist_albums(channel_id, params=params, limit=limit)
-        except Exception as e:
-            print(f"Error getting artist albums: {e}")
+            result = self.api.get_artist_albums(channel_id, params=params, limit=limit)
+            if result:
+                return result
+        except Exception:
+            pass
+        # Fallback: try as channel content
+        try:
+            result = self.api.get_user_playlists(channel_id, params)
+            if result:
+                return result
+        except Exception:
+            pass
+        # Last resort: raw parse
+        try:
+            result = self._raw_parse_channel_content(channel_id, params)
+            if result:
+                return result
+        except Exception:
+            pass
+        return []
+
+    def _raw_parse_channel_content(self, browse_id, params):
+        """Parse channel content from raw API response when ytmusicapi can't."""
+        body = {"browseId": browse_id}
+        if params:
+            body["params"] = params
+        response = self.api._send_request("browse", body)
+
+        tabs = response.get("contents", {}).get("singleColumnBrowseResultsRenderer", {}).get("tabs", [])
+        if not tabs:
             return []
+
+        sections = tabs[0].get("tabRenderer", {}).get("content", {}).get("sectionListRenderer", {}).get("contents", [])
+        items = []
+        for section in sections:
+            for renderer_key in ["gridRenderer", "musicShelfRenderer", "musicPlaylistShelfRenderer", "musicCarouselShelfRenderer"]:
+                renderer = section.get(renderer_key, {})
+                content_key = "items" if "items" in renderer else "contents"
+                for raw_item in renderer.get(content_key, []):
+                    parsed = self._parse_channel_item(raw_item)
+                    if parsed:
+                        items.append(parsed)
+                    # Check for continuation token
+                    cont = raw_item.get("continuationItemRenderer", {})
+                    if cont:
+                        token = cont.get("continuationEndpoint", {}).get("continuationCommand", {}).get("token")
+                        if token:
+                            items.extend(self._fetch_continuation(token))
+        return items
+
+    def _fetch_continuation(self, token, max_pages=20):
+        """Follow continuation tokens to get all paginated results."""
+        items = []
+        for _ in range(max_pages):
+            if not token:
+                break
+            try:
+                response = self.api._send_request("browse", {"continuation": token})
+                token = None  # Reset for next iteration
+
+                # Format 1: onResponseReceivedActions (common for playlists)
+                for action in response.get("onResponseReceivedActions", []):
+                    if not isinstance(action, dict):
+                        continue
+                    cont_action = action.get("appendContinuationItemsAction", {})
+                    for raw_item in cont_action.get("continuationItems", []):
+                        cont_item = raw_item.get("continuationItemRenderer")
+                        if cont_item:
+                            token = cont_item.get("continuationEndpoint", {}).get("continuationCommand", {}).get("token")
+                        else:
+                            parsed = self._parse_channel_item(raw_item)
+                            if parsed:
+                                items.append(parsed)
+
+                # Format 2: continuationContents (older format)
+                cont_contents = response.get("continuationContents", {})
+                for renderer_key in ["musicPlaylistShelfContinuation", "gridContinuation", "musicShelfContinuation"]:
+                    renderer = cont_contents.get(renderer_key, {})
+                    if not renderer:
+                        continue
+                    for raw_item in renderer.get("contents", []) + renderer.get("items", []):
+                        cont_item = raw_item.get("continuationItemRenderer")
+                        if cont_item:
+                            token = cont_item.get("continuationEndpoint", {}).get("continuationCommand", {}).get("token")
+                        else:
+                            parsed = self._parse_channel_item(raw_item)
+                            if parsed:
+                                items.append(parsed)
+            except Exception:
+                break
+        return items
+
+    def _parse_channel_item(self, raw_item):
+        """Best-effort parse of a channel content item."""
+        for item_key in ["musicTwoRowItemRenderer", "musicResponsiveListItemRenderer"]:
+            renderer = raw_item.get(item_key)
+            if not renderer:
+                continue
+            result = {}
+            # Title — check both direct title.runs and flexColumns
+            title_runs = renderer.get("title", {}).get("runs", [])
+            if not title_runs:
+                # flexColumns format (used in musicResponsiveListItemRenderer)
+                for col in renderer.get("flexColumns", []):
+                    col_renderer = col.get("musicResponsiveListItemFlexColumnRenderer", {})
+                    runs = col_renderer.get("text", {}).get("runs", [])
+                    if runs and not result.get("title"):
+                        title_runs = runs
+                        break
+
+            if title_runs:
+                result["title"] = title_runs[0].get("text", "")
+                nav = title_runs[0].get("navigationEndpoint", {})
+                browse_ep = nav.get("browseEndpoint", {})
+                watch_ep_title = nav.get("watchEndpoint", {})
+                if browse_ep.get("browseId"):
+                    result["browseId"] = browse_ep["browseId"]
+                if watch_ep_title.get("videoId"):
+                    result["videoId"] = watch_ep_title["videoId"]
+                    result["playlistId"] = watch_ep_title.get("playlistId", "")
+
+            # Artists from flexColumns (second column usually)
+            for col in renderer.get("flexColumns", [])[1:]:
+                col_renderer = col.get("musicResponsiveListItemFlexColumnRenderer", {})
+                runs = col_renderer.get("text", {}).get("runs", [])
+                artists = []
+                for r in runs:
+                    browse_nav = r.get("navigationEndpoint", {}).get("browseEndpoint", {})
+                    if browse_nav.get("browseId"):
+                        artists.append({"name": r.get("text", ""), "id": browse_nav["browseId"]})
+                    elif r.get("text", "").strip() and r["text"].strip() not in ("•", "&", ","):
+                        artists.append({"name": r["text"].strip()})
+                if artists:
+                    result["artists"] = artists
+                    break
+
+            # Duration from fixedColumns
+            for col in renderer.get("fixedColumns", []):
+                col_renderer = col.get("musicResponsiveListItemFixedColumnRenderer", {})
+                runs = col_renderer.get("text", {}).get("runs", [])
+                if runs:
+                    result["duration"] = runs[0].get("text", "")
+                    break
+
+            # Thumbnail
+            thumb_renderer = renderer.get("thumbnailRenderer", {}).get("musicThumbnailRenderer", {})
+            if not thumb_renderer:
+                thumb_renderer = renderer.get("thumbnail", {}).get("musicThumbnailRenderer", {})
+            thumbs = thumb_renderer.get("thumbnail", {}).get("thumbnails", [])
+            if thumbs:
+                result["thumbnails"] = thumbs
+
+            # VideoId from overlay play button (fallback if not from title)
+            if not result.get("videoId"):
+                overlay = renderer.get("overlay", {}).get("musicItemThumbnailOverlayRenderer", {})
+                play_btn = overlay.get("content", {}).get("musicPlayButtonRenderer", {})
+                watch_ep = play_btn.get("playNavigationEndpoint", {}).get("watchEndpoint", {})
+                if watch_ep.get("videoId"):
+                    result["videoId"] = watch_ep["videoId"]
+                    result["playlistId"] = watch_ep.get("playlistId", "")
+
+            # Subtitle (for musicTwoRowItemRenderer)
+            subtitle_runs = renderer.get("subtitle", {}).get("runs", [])
+            if subtitle_runs:
+                parts = [r.get("text", "") for r in subtitle_runs]
+                result["subtitle"] = "".join(parts)
+                if not result.get("artists"):
+                    artists = []
+                    for r in subtitle_runs:
+                        nav = r.get("navigationEndpoint", {}).get("browseEndpoint", {})
+                    if nav.get("browseId"):
+                        artists.append({"name": r["text"], "id": nav["browseId"]})
+                if artists:
+                    result["artists"] = artists
+
+            if result.get("title"):
+                return result
+        return None
 
     def get_liked_songs(self, limit=100):
         if not self.is_authenticated():
@@ -791,43 +1177,69 @@ class MusicClient:
             headers_start = base_headers.copy()
             headers_start.update(
                 {
+                    "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+                    "Content-Length": "0",
                     "X-Goog-Upload-Command": "start",
                     "X-Goog-Upload-Protocol": "resumable",
                     "X-Goog-Upload-Header-Content-Length": str(len(img_data)),
+                    "Origin": "https://music.youtube.com",
+                    "Referer": f"https://music.youtube.com/playlist?list={playlist_id}",
                 }
             )
 
             init_res = requests.post(
                 "https://music.youtube.com/playlist_image_upload/playlist_custom_thumbnail",
                 headers=headers_start,
+                data=b"",
             )
+
+            print(f"DEBUG STEP1: status={init_res.status_code}")
+            print(f"DEBUG STEP1: response headers={dict(init_res.headers)}")
+            print(f"DEBUG STEP1: body={init_res.text[:500]}")
 
             upload_id = init_res.headers.get("x-guploader-uploadid")
 
             if not upload_id:
                 raise Exception(
-                    "Failed to obtain upload ID. (Is your account verified with a phone number?)"
+                    f"Failed to obtain upload ID. Status={init_res.status_code}, Body={init_res.text[:500]}"
                 )
 
             # --- STEP 2: UPLOAD BINARY DATA ---
+            upload_url = init_res.headers.get("X-Goog-Upload-URL")
+
             headers_upload = base_headers.copy()
             headers_upload.update(
                 {
+                    "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
                     "X-Goog-Upload-Command": "upload, finalize",
                     "X-Goog-Upload-Offset": "0",
+                    "Origin": "https://music.youtube.com",
+                    "Referer": f"https://music.youtube.com/playlist?list={playlist_id}",
                 }
             )
+            # Remove any encoding headers that cause "Could not decompress" errors
+            headers_upload.pop("Accept-Encoding", None)
+            headers_upload.pop("Content-Encoding", None)
 
-            params = {"upload_id": upload_id, "upload_protocol": "resumable"}
-
-            upload_res = requests.post(
-                "https://music.youtube.com/playlist_image_upload/playlist_custom_thumbnail",
-                headers=headers_upload,
-                params=params,
+            import urllib.request
+            req = urllib.request.Request(
+                upload_url,
                 data=img_data,
+                headers=headers_upload,
+                method="POST",
             )
+            with urllib.request.urlopen(req) as resp:
+                upload_body = resp.read().decode("utf-8")
+                upload_status = resp.status
 
-            blob_data = upload_res.json()
+            print(f"DEBUG STEP2: status={upload_status}")
+            print(f"DEBUG STEP2: body={upload_body[:500]}")
+
+            if not upload_body.strip():
+                raise Exception(f"Upload returned empty response. Status={upload_status}")
+
+            import json as _json
+            blob_data = _json.loads(upload_body)
             blob_id = blob_data.get("encryptedBlobId")
 
             if not blob_id:

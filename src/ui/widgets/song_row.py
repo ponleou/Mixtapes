@@ -24,7 +24,7 @@ class SongRowWidget(Gtk.Box):
         self.append(self.row)
 
         # Image with playing indicator overlay
-        self.img = AsyncPicture(crop_to_square=True, target_size=44, player=self.player)
+        self.img = AsyncPicture(crop_to_square=True, target_size=56, player=self.player)
         self.img.add_css_class("song-img")
 
         self.img_overlay = Gtk.Overlay()
@@ -327,16 +327,31 @@ class SongRowWidget(Gtk.Box):
         action_add.connect("activate", add_to_playlist_action)
         group.add_action(action_add)
 
-        menu_model = Gio.Menu()
-        if item.video_id:
-            menu_model.append("Copy Link", "row.copy_link")
+        # Start Radio
+        def start_radio_action(action, param):
+            vid = item.video_id
+            if vid:
+                self.player.start_radio(video_id=vid)
+                self._show_toast("Starting radio...")
 
+        action_radio = Gio.SimpleAction.new("start_radio", None)
+        action_radio.connect("activate", start_radio_action)
+        group.add_action(action_radio)
+
+        menu_model = Gio.Menu()
+
+        # Navigation section
+        nav_section = Gio.Menu()
         artists = item.track_data.get("artists", [])
         if artists and artists[0].get("id"):
-            menu_model.append("Go to Artist", "row.goto_artist")
+            nav_section.append("Go to Artist", "row.goto_artist")
+        if nav_section.get_n_items() > 0:
+            menu_model.append_section(None, nav_section)
 
-        # Add to Playlist Submenu
+        # Actions section
+        action_section = Gio.Menu()
         if item.video_id:
+            action_section.append("Start Radio", "row.start_radio")
             playlists = self.client.get_editable_playlists()
             if playlists:
                 playlist_menu = Gio.Menu()
@@ -344,9 +359,17 @@ class SongRowWidget(Gtk.Box):
                     p_title = p.get("title", "Unknown Playlist")
                     p_id = p.get("playlistId")
                     if p_id:
-                        # Add action with parameter
                         playlist_menu.append(p_title, f"row.add_to_playlist('{p_id}')")
-                menu_model.append_submenu("Add to Playlist", playlist_menu)
+                action_section.append_submenu("Add to Playlist", playlist_menu)
+        if action_section.get_n_items() > 0:
+            menu_model.append_section(None, action_section)
+
+        # Clipboard section
+        clip_section = Gio.Menu()
+        if item.video_id:
+            clip_section.append("Copy Link", "row.copy_link")
+        if clip_section.get_n_items() > 0:
+            menu_model.append_section(None, clip_section)
 
         if menu_model.get_n_items() > 0:
             popover = Gtk.PopoverMenu.new_from_model(menu_model)

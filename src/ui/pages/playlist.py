@@ -100,10 +100,23 @@ class PlaylistPage(Adw.Bin):
         self.description_label.set_halign(Gtk.Align.START)
         self.description_label.set_vexpand(False)
         self.description_label.set_hexpand(True)
-        self.description_label.set_visible(False)
-        self.description_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self.description_label.set_lines(3)
-        self.details_col.append(self.description_label)
+        self._description_expanded = False
+        self._full_description = ""
+
+        self.read_more_btn = Gtk.Label()
+        self.read_more_btn.set_use_markup(True)
+        self.read_more_btn.set_markup("<a href='toggle'>Read more</a>")
+        self.read_more_btn.add_css_class("caption")
+        self.read_more_btn.set_halign(Gtk.Align.START)
+        self.read_more_btn.set_visible(False)
+        self.read_more_btn.connect("activate-link", self._on_read_more_clicked)
+
+        # Group description + read more tightly without extra spacing
+        self.desc_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.desc_box.append(self.description_label)
+        self.desc_box.append(self.read_more_btn)
+        self.desc_box.set_visible(False)
+        self.details_col.append(self.desc_box)
 
         self.meta_label = Gtk.Label(label="")
         self.meta_label.add_css_class("caption")
@@ -178,7 +191,21 @@ class PlaylistPage(Adw.Bin):
 
         action_delete = Gio.SimpleAction.new("delete", None)
         action_delete.connect("activate", self.on_delete_clicked)
+
+        action_sel_add = Gio.SimpleAction.new("sel_add_to_playlist", GLib.VariantType.new("s"))
+        action_sel_add.connect("activate", self._on_sel_add_to_playlist)
+        self.action_group.add_action(action_sel_add)
         self.action_group.add_action(action_delete)
+
+        action_save = Gio.SimpleAction.new("save_to_library", None)
+        action_save.connect("activate", self._on_save_to_library)
+        self.action_group.add_action(action_save)
+
+        action_unsave = Gio.SimpleAction.new("remove_from_library", None)
+        action_unsave.connect("activate", self._on_remove_from_library)
+        self.action_group.add_action(action_unsave)
+
+        self._is_saved_to_library = False
 
         # We need to track visibility of edit/delete in the menu
         # Gio.MenuItem doesn't have set_visible, so we might need to refresh the menu
@@ -195,12 +222,88 @@ class PlaylistPage(Adw.Bin):
         self.header_info_box.append(self.details_col)
         self.header_container.append(self.header_info_box)
 
-        self.sort_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self._sort_descending = False
+        self.sort_dir_btn = Gtk.Button(icon_name="view-sort-ascending-symbolic")
+        self.sort_dir_btn.add_css_class("flat")
+        self.sort_dir_btn.add_css_class("circular")
+        self.sort_dir_btn.set_tooltip_text("Toggle sort direction")
+        self.sort_dir_btn.connect("clicked", self._on_sort_dir_clicked)
+
+        self.sort_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.sort_row.set_margin_top(12)
         self.sort_row.add_css_class("playlist-sort-row")
         self.sort_row.append(self.sort_dropdown)
+        self.sort_row.append(self.sort_dir_btn)
+        # Select toggle button
+        self.select_btn = Gtk.ToggleButton(icon_name="selection-mode-symbolic")
+        self.select_btn.add_css_class("flat")
+        self.select_btn.add_css_class("circular")
+        self.select_btn.set_tooltip_text("Select multiple songs")
+        self.select_btn.connect("toggled", self._on_select_toggled)
+
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+
+        self.sort_row.append(spacer)
+        self.sort_row.append(self.select_btn)
         self.sort_row.set_visible(False)
         self.header_container.append(self.sort_row)
+
+        # Selection action bar (hidden by default)
+        self.selection_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.selection_bar.set_margin_top(8)
+        self.selection_bar.set_margin_bottom(4)
+        self.selection_bar.set_visible(False)
+
+        self.selection_count_label = Gtk.Label(label="0 selected")
+        self.selection_count_label.add_css_class("caption")
+        self.selection_bar.append(self.selection_count_label)
+
+        sel_all_btn = Gtk.Button(label="All")
+        sel_all_btn.add_css_class("flat")
+        sel_all_btn.add_css_class("caption")
+        sel_all_btn.set_tooltip_text("Select all")
+        sel_all_btn.connect("clicked", lambda b: self._select_all())
+        self.selection_bar.append(sel_all_btn)
+
+        sel_none_btn = Gtk.Button(label="None")
+        sel_none_btn.add_css_class("flat")
+        sel_none_btn.add_css_class("caption")
+        sel_none_btn.set_tooltip_text("Deselect all")
+        sel_none_btn.connect("clicked", lambda b: self._deselect_all())
+        self.selection_bar.append(sel_none_btn)
+
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        self.selection_bar.append(spacer)
+
+        sel_play_btn = Gtk.Button(icon_name="media-playback-start-symbolic")
+        sel_play_btn.add_css_class("flat")
+        sel_play_btn.set_tooltip_text("Play selected")
+        sel_play_btn.connect("clicked", self._on_sel_play)
+        self.selection_bar.append(sel_play_btn)
+
+        sel_add_btn = Gtk.MenuButton(icon_name="list-add-symbolic")
+        sel_add_btn.add_css_class("flat")
+        sel_add_btn.set_tooltip_text("Add selected to playlist")
+        self.sel_add_menu = Gio.Menu()
+        sel_add_btn.set_menu_model(self.sel_add_menu)
+        self.selection_bar.append(sel_add_btn)
+
+        self.sel_remove_btn = Gtk.Button(icon_name="user-trash-symbolic")
+        self.sel_remove_btn.add_css_class("flat")
+        self.sel_remove_btn.add_css_class("destructive-action")
+        self.sel_remove_btn.set_tooltip_text("Remove selected from playlist")
+        self.sel_remove_btn.connect("clicked", self._on_sel_remove)
+        self.sel_remove_btn.set_visible(False)
+        self.selection_bar.append(self.sel_remove_btn)
+
+        sel_cancel_btn = Gtk.Button(label="Cancel")
+        sel_cancel_btn.add_css_class("flat")
+        sel_cancel_btn.connect("clicked", lambda b: self.select_btn.set_active(False))
+        self.selection_bar.append(sel_cancel_btn)
+
+        self.header_container.append(self.selection_bar)
 
         self.empty_label = Gtk.Label(label="This playlist has no songs")
         self.empty_label.add_css_class("dim-label")
@@ -229,9 +332,8 @@ class PlaylistPage(Adw.Bin):
         self.master_store.append(self.filter_model)
 
         self.flatten_model = Gtk.FlattenListModel.new(self.master_store)
-        self.selection_model = Gtk.SingleSelection.new(self.flatten_model)
-        self.selection_model.set_autoselect(False)
-        self.selection_model.set_can_unselect(True)
+        self._multi_select_mode = False
+        self.selection_model = Gtk.NoSelection.new(self.flatten_model)
 
         # ── 3. List & ScrolledWindow ──────────────────────────────────────────
         factory = Gtk.SignalListItemFactory()
@@ -304,9 +406,16 @@ class PlaylistPage(Adw.Bin):
         row.set_hexpand(True)
         row.add_css_class("song-row")
 
+        # Checkbox for multi-select (hidden by default)
+        check = Gtk.CheckButton()
+        check.set_valign(Gtk.Align.CENTER)
+        check.set_visible(False)
+        row.append(check)
+        row._lv_check = check
+
         from ui.utils import AsyncPicture
 
-        img = AsyncPicture(crop_to_square=True, target_size=44, player=self.player)
+        img = AsyncPicture(crop_to_square=True, target_size=56, player=self.player)
         img.add_css_class("song-img")
         row.append(img)
         row._lv_img = img
@@ -364,10 +473,10 @@ class PlaylistPage(Adw.Bin):
         row.append(dur_lbl)
         row._lv_dur_lbl = dur_lbl
 
-        like_box = Gtk.Box()
-        like_box.set_valign(Gtk.Align.CENTER)
-        row.append(like_box)
-        row._lv_like_box = like_box
+        like_btn = LikeButton(self.client, None)
+        like_btn.set_valign(Gtk.Align.CENTER)
+        row.append(like_btn)
+        row._lv_like_btn = like_btn
 
         gesture = Gtk.GestureClick()
         gesture.set_button(3)
@@ -412,6 +521,25 @@ class PlaylistPage(Adw.Bin):
         row = bin_widget._lv_track_ui
         t = item.data
 
+        # Multi-select checkbox
+        video_id = t.get("videoId")
+        is_selected = video_id in getattr(self, '_selected_video_ids', set())
+        if self._multi_select_mode:
+            row._lv_check.set_visible(True)
+            if hasattr(row, '_lv_check_handler') and row._lv_check_handler:
+                row._lv_check.disconnect(row._lv_check_handler)
+            row._lv_check.set_active(is_selected)
+            row._lv_check_handler = row._lv_check.connect(
+                "toggled", lambda cb, vid=video_id, r=row: self._toggle_track_selection(vid, r)
+            )
+        else:
+            row._lv_check.set_visible(False)
+            if hasattr(row, '_lv_check_handler') and row._lv_check_handler:
+                row._lv_check.disconnect(row._lv_check_handler)
+                row._lv_check_handler = None
+        # Apply selection highlight
+        self._apply_row_selection(row, is_selected and self._multi_select_mode)
+
         title = t.get("title", "Unknown")
         artist_list = t.get("artists", [])
         artist = ", ".join(a.get("name", "") for a in artist_list)
@@ -435,6 +563,8 @@ class PlaylistPage(Adw.Bin):
         else:
             row._lv_track_num.set_visible(False)
             row._lv_img.set_visible(True)
+            root = self.get_root()
+            row._lv_img.set_compact(getattr(root, '_is_compact', False) if root else False)
             if thumb_url:
                 row._lv_img.video_id = t.get("videoId")
                 if row._lv_img.url != thumb_url:
@@ -454,12 +584,11 @@ class PlaylistPage(Adw.Bin):
         is_explicit = t.get("isExplicit") or t.get("explicit", False)
         row._lv_explicit_badge.set_visible(bool(is_explicit))
 
-        _clear_box(row._lv_like_box)
         if t.get("videoId"):
-            like_btn = LikeButton(
-                self.client, t["videoId"], t.get("likeStatus", "INDIFFERENT")
-            )
-            row._lv_like_box.append(like_btn)
+            row._lv_like_btn.set_data(t["videoId"], t.get("likeStatus", "INDIFFERENT"))
+            row._lv_like_btn.set_visible(True)
+        else:
+            row._lv_like_btn.set_visible(False)
 
         has_id = bool(t.get("videoId"))
         list_item.set_activatable(has_id)
@@ -524,7 +653,12 @@ class PlaylistPage(Adw.Bin):
         row._lv_dur_lbl.set_visible(False)
         row.remove_css_class("playing")
         row._lv_explicit_badge.set_visible(False)
-        _clear_box(row._lv_like_box)
+        row._lv_like_btn.set_visible(False)
+        row._lv_check.set_visible(False)
+        row.remove_css_class("selected")
+        if hasattr(row, '_lv_check_handler') and row._lv_check_handler:
+            row._lv_check.disconnect(row._lv_check_handler)
+            row._lv_check_handler = None
         row._lv_video_data = None
         row._lv_full_track = None
 
@@ -544,9 +678,41 @@ class PlaylistPage(Adw.Bin):
             if dx > 10 or dy > 10:
                 return
 
-        # Trigger the same logic as if the listview emitted 'activate'
-        position = list_item.get_position()
-        self.on_song_activated(self.songs_list, position)
+        # In multi-select mode, toggle selection instead of playing
+        if self._multi_select_mode:
+            track = getattr(row, "_lv_full_track", None)
+            vid = track.get("videoId") if track else None
+            if vid:
+                self._toggle_track_selection(vid, row)
+                if hasattr(row, '_lv_check'):
+                    row._lv_check.set_active(vid in self._selected_video_ids)
+            return
+
+        track = getattr(row, "_lv_full_track", None)
+        if not track or not track.get("videoId"):
+            return
+
+        video_id = track["videoId"]
+        # Prefer original_tracks when available (covers filtered results beyond lazy-loaded range)
+        tracks_to_queue = (
+            self.original_tracks
+            if hasattr(self, "original_tracks") and self.original_tracks
+            else self._best_queue()
+        )
+        start_index = 0
+        for i, t in enumerate(tracks_to_queue):
+            if t.get("videoId") == video_id:
+                start_index = i
+                break
+
+        self.player.set_queue(
+            tracks_to_queue,
+            start_index,
+            source_id=self.playlist_id,
+            is_infinite=self._is_inf(),
+        )
+        if getattr(self, "_is_background_fetching", False):
+            self._pending_queue_append = True
 
     # ── Filter ────────────────────────────────────────────────────────────────
 
@@ -560,7 +726,44 @@ class PlaylistPage(Adw.Bin):
 
     def filter_content(self, text):
         self.current_filter_text = text.lower().strip()
+
+        # Search all data in original_tracks and rebuild the track store with matches
+        if hasattr(self, "original_tracks") and self.original_tracks:
+            # Disable the GTK filter during manual rebuilds to avoid double-filtering
+            self.filter_model.set_filter(None)
+
+            if self.current_filter_text:
+                matches = []
+                for t in self.original_tracks:
+                    title = t.get("title", "").lower()
+                    artist = ", ".join(a.get("name", "") for a in t.get("artists", [])).lower()
+                    album = ""
+                    if isinstance(t.get("album"), dict):
+                        album = t["album"].get("name", "").lower()
+                    elif t.get("album"):
+                        album = str(t["album"]).lower()
+                    if (self.current_filter_text in title
+                            or self.current_filter_text in artist
+                            or self.current_filter_text in album):
+                        matches.append(t)
+                matches = self._sort_tracks(matches)
+                self.track_store.splice(0, self.track_store.get_n_items(), [TrackItem(t) for t in matches])
+            else:
+                # Filter cleared: restore from current_tracks (lazy-loaded subset)
+                items = [TrackItem(t) for t in self.current_tracks]
+                self.track_store.splice(0, self.track_store.get_n_items(), items)
+
+            # Always re-enable the GTK filter so any tracks added later
+            # (lazy-load, background fetch) are also filtered
+            self.filter_model.set_filter(self.track_filter)
+            if self._multi_select_mode:
+                self._update_selection_count()
+            return
+
+        # Fallback: use the GTK filter
         self.track_filter.changed(Gtk.FilterChange.DIFFERENT)
+        if self._multi_select_mode:
+            self._update_selection_count()
 
     # ── Store helpers ─────────────────────────────────────────────────────────
 
@@ -652,7 +855,14 @@ class PlaylistPage(Adw.Bin):
         # 2. Copy Link (Always shown)
         self.more_menu_model.append("Copy Link", "page.copy_link")
 
-        # 3. Edit/Delete (Only if owned/editable)
+        # 3. Save/Unsave from Library (not for owned playlists — they're always in library)
+        if not is_owned and self.client.is_authenticated():
+            if self._is_saved_to_library:
+                self.more_menu_model.append("Remove from Library", "page.remove_from_library")
+            else:
+                self.more_menu_model.append("Add to Library", "page.save_to_library")
+
+        # 4. Edit/Delete (Only if owned/editable)
         if is_owned:
             self.more_menu_model.append("Edit Playlist", "page.edit")
             self.more_menu_model.append("Delete Playlist", "page.delete")
@@ -675,10 +885,63 @@ class PlaylistPage(Adw.Bin):
 
         threading.Thread(target=thread_func, daemon=True).start()
 
+    def _on_save_to_library(self, action, param):
+        pid = self._audio_playlist_id or self.playlist_id
+        if not pid:
+            return
+
+        def thread_func():
+            success = self.client.rate_playlist(pid, "LIKE")
+            if success:
+                self._is_saved_to_library = True
+                # Invalidate library cache so it refetches
+                self.client._library_album_ids.clear()
+                self.client._library_playlist_ids.clear()
+                GLib.idle_add(self._show_toast, "Saved to library")
+                GLib.idle_add(self._refresh_more_menu, self.is_owned)
+                GLib.idle_add(self._refresh_library_page)
+            else:
+                GLib.idle_add(self._show_toast, "Failed to save")
+
+        threading.Thread(target=thread_func, daemon=True).start()
+
+    def _on_remove_from_library(self, action, param):
+        pid = self._audio_playlist_id or self.playlist_id
+        if not pid:
+            return
+
+        def thread_func():
+            success = self.client.rate_playlist(pid, "INDIFFERENT")
+            if success:
+                self._is_saved_to_library = False
+                self.client._library_album_ids.clear()
+                self.client._library_playlist_ids.clear()
+                GLib.idle_add(self._show_toast, "Removed from library")
+                GLib.idle_add(self._refresh_more_menu, self.is_owned)
+                GLib.idle_add(self._refresh_library_page)
+            else:
+                GLib.idle_add(self._show_toast, "Failed to remove")
+
+        threading.Thread(target=thread_func, daemon=True).start()
+
+    def _refresh_library_page(self):
+        root = self.get_root()
+        if root and hasattr(root, "library_page"):
+            root.library_page.load_library()
+
     def _show_toast(self, message):
         root = self.get_root()
         if hasattr(root, "add_toast"):
             root.add_toast(message)
+
+    def _remove_track_by_entity_id(self, entity_id):
+        """Remove a track from local data by entityId and refresh the view."""
+        self.original_tracks = [t for t in self.original_tracks if t.get("entityId") != entity_id]
+        self.current_tracks = [t for t in self.current_tracks if t.get("entityId") != entity_id]
+        self._clear_track_store()
+        for t in self.current_tracks:
+            self._add_track_row(t)
+        self._update_duration_from_all_tracks()
 
     def _on_unmap(self, widget):
         self.emit("header-title-changed", "")
@@ -688,6 +951,7 @@ class PlaylistPage(Adw.Bin):
     def load_playlist(self, playlist_id, initial_data=None):
         if self.playlist_id != playlist_id:
             self.playlist_id = playlist_id
+            self._audio_playlist_id = None
             self.playlist_title_text = ""
             self.current_limit = 50
             self.emit("header-title-changed", "")
@@ -754,6 +1018,12 @@ class PlaylistPage(Adw.Bin):
 
     def _fetch_playlist_details(self, playlist_id, is_incremental=False):
         try:
+            # Virtual playlists (like UPLOADS) are fully loaded already
+            if playlist_id.startswith("UPLOAD"):
+                self.is_fully_loaded = True
+                self.is_fully_fetched = True
+                return
+
             if playlist_id.startswith("OLAK"):
                 try:
                     new_id = self.client.get_album_browse_id(playlist_id)
@@ -766,7 +1036,80 @@ class PlaylistPage(Adw.Bin):
             count_str = None
             album_type = None
 
-            if playlist_id == "LM":
+            if playlist_id.startswith("FEmusic_library_privately_owned"):
+                # Uploaded album — use special API
+                try:
+                    data = self.client.get_library_upload_album(playlist_id)
+                    if not data:
+                        raise Exception("Failed to fetch uploaded album")
+                    title = data.get("title", "Unknown Album")
+                    description = ""
+                    tracks = data.get("tracks", [])
+                    thumbnails = data.get("thumbnails", [])
+                    track_count = len(tracks)
+                    year = data.get("year", "")
+                    album_type = "Upload"
+
+                    artists = data.get("artists", [])
+                    # Fallback: check "artist" (singular string) field
+                    if not artists and data.get("artist"):
+                        artist_name = data["artist"]
+                        if isinstance(artist_name, str):
+                            artists = [{"name": artist_name}]
+
+                    if isinstance(artists, list) and artists:
+                        author = ", ".join(
+                            GLib.markup_escape_text(a.get("name", "")) for a in artists if isinstance(a, dict)
+                        )
+                    else:
+                        author = ""
+
+                    song_text = "song" if track_count == 1 else "songs"
+                    count_str = f"{track_count} {song_text}"
+
+                    # Cross-reference with all uploaded songs to fill missing artist data
+                    try:
+                        all_songs = self.client.get_library_upload_songs(limit=None)
+                        songs_by_id = {}
+                        if all_songs:
+                            for s in all_songs:
+                                vid = s.get("videoId")
+                                if vid:
+                                    songs_by_id[vid] = s
+                    except Exception:
+                        songs_by_id = {}
+
+                    # Fill in missing data on tracks
+                    # Priority: all-songs data > album data > nothing
+                    for track in tracks:
+                        vid = track.get("videoId")
+                        ref = songs_by_id.get(vid, {}) if vid else {}
+
+                        # Thumbnails
+                        if not track.get("thumbnails"):
+                            track["thumbnails"] = ref.get("thumbnails") or thumbnails
+
+                        # Artists: prefer all-songs data (most accurate), then album
+                        if ref.get("artists"):
+                            track["artists"] = ref["artists"]
+                        elif not track.get("artists") and artists:
+                            track["artists"] = artists
+
+                        # Build artist string from artists list
+                        track_artists = track.get("artists", [])
+                        if track_artists:
+                            track["artist"] = ", ".join(
+                                a.get("name", "") for a in track_artists if isinstance(a, dict)
+                            )
+                        elif ref.get("artist"):
+                            track["artist"] = ref["artist"]
+
+                    is_owned = False
+                except Exception as e:
+                    print(f"Error fetching uploaded album: {e}")
+                    return
+
+            elif playlist_id == "LM":
                 data = self.client.get_liked_songs(limit=self.current_limit)
                 title = "Your Likes"
                 description = "Your liked songs from YouTube Music."
@@ -798,6 +1141,7 @@ class PlaylistPage(Adw.Bin):
             elif playlist_id.startswith("MPRE"):
                 try:
                     data = self.client.get_album(playlist_id)
+                    self._audio_playlist_id = data.get("audioPlaylistId")
                     title = data.get("title", "Unknown Album")
                     description = data.get("description", "")
                     tracks = data.get("tracks", [])
@@ -947,6 +1291,9 @@ class PlaylistPage(Adw.Bin):
                     track_count = 0
                     song_text = "songs"
                     count_str = "0 songs"
+                    year = None
+                    album_type = None
+                    is_owned = False
 
             total_seconds = 0
             if "duration_seconds" in data:
@@ -1046,16 +1393,27 @@ class PlaylistPage(Adw.Bin):
         self.playlist_name_label.set_label(title)
 
         if description and description.strip():
-            self.description_label.set_label(description)
-            self.description_label.set_visible(True)
+            self._full_description = description
+            self._description_expanded = False
+            self.read_more_btn.set_markup("<a href='toggle'>Read more</a>")
+            if len(description) > 200:
+                truncated = description[:200].rsplit(" ", 1)[0] + "..."
+                self.description_label.set_label(truncated)
+                self.read_more_btn.set_visible(True)
+            else:
+                self.description_label.set_label(description)
+                self.read_more_btn.set_visible(False)
+            self.desc_box.set_visible(True)
         else:
-            self.description_label.set_visible(False)
+            self.desc_box.set_visible(False)
 
         self.meta_label.set_markup(meta1)
         self.stats_label.set_label(meta2)
 
         is_album = self.playlist_id and (
-            self.playlist_id.startswith("MPRE") or self.playlist_id.startswith("OLAK")
+            self.playlist_id.startswith("MPRE")
+            or self.playlist_id.startswith("OLAK")
+            or self.playlist_id.startswith("FEmusic_library_privately_owned")
         )
         self._is_album_view = is_album
         has_tracks = bool(tracks)
@@ -1066,6 +1424,10 @@ class PlaylistPage(Adw.Bin):
         self.is_owned = is_owned
         self.is_editable = self.client.is_authenticated() and not is_album and is_owned
         is_editable = self.is_editable
+
+        # Check library status for save/unsave toggle
+        check_id = getattr(self, '_audio_playlist_id', None) or self.playlist_id
+        self._is_saved_to_library = is_owned or self.client.is_in_library(check_id)
 
         # Dynamically rebuild the menu to show/hide Edit/Delete
         self._refresh_more_menu(is_owned=is_editable)
@@ -1114,7 +1476,8 @@ class PlaylistPage(Adw.Bin):
                 print(f"Playlist fully loaded ({len(tracks)} >= total {total_tracks})")
                 self.is_fully_loaded = True
         else:
-            self.is_fully_loaded = False
+            if not getattr(self, "is_fully_loaded", False):
+                self.is_fully_loaded = False
             if total_tracks is not None and len(tracks) >= total_tracks:
                 self.is_fully_loaded = True
                 self.is_fully_fetched = True
@@ -1163,9 +1526,10 @@ class PlaylistPage(Adw.Bin):
         self.is_fully_fetched = True
         self._is_background_fetching = False
 
-        if self.sort_dropdown.get_selected() != 0:
-            self.current_tracks = list(self.original_tracks)
-            self.reorder_playlist(self.sort_dropdown.get_selected())
+        # Re-sort with full data now available
+        sort_type = self.sort_dropdown.get_selected()
+        if sort_type != 0 or getattr(self, '_sort_descending', False):
+            self.reorder_playlist(sort_type)
 
         if getattr(self, "_pending_queue_append", False):
             print("Background fetch complete, extending player queue.")
@@ -1175,15 +1539,41 @@ class PlaylistPage(Adw.Bin):
                 self.player.extend_queue(new_tracks)
             self._pending_queue_append = False
 
+        # Recalculate duration from all tracks now that we have the full data
+        self._update_duration_from_all_tracks()
+
+    def _update_duration_from_all_tracks(self):
+        tracks = self.original_tracks if hasattr(self, "original_tracks") and self.original_tracks else self.current_tracks
+        total_seconds = sum(t.get("duration_seconds", 0) for t in tracks)
+        track_count = len(tracks)
+        song_text = "song" if track_count == 1 else "songs"
+
+        meta2_parts = [f"{track_count} {song_text}"]
+        if total_seconds > 0:
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            seconds = total_seconds % 60
+            duration_str = (
+                f"{hours} hr {minutes} min"
+                if hours > 0
+                else f"{minutes} min {seconds} sec"
+            )
+            meta2_parts.append(duration_str)
+        self.stats_label.set_label(" • ".join(meta2_parts))
+
     # ── Song activation ───────────────────────────────────────────────────────
 
-    def on_copy_link_clicked(self, btn):
+    def on_copy_link_clicked(self, action, param):
         if not self.playlist_id:
             return
         is_album = self.playlist_id.startswith("MPRE") or self.playlist_id.startswith(
             "OLAK"
         )
-        link = get_yt_music_link(self.playlist_id, is_album=is_album)
+        link = get_yt_music_link(
+            self.playlist_id,
+            is_album=is_album,
+            audio_playlist_id=getattr(self, '_audio_playlist_id', None),
+        )
         if link:
             clipboard = Gdk.Display.get_default().get_clipboard()
             clipboard.set(link)
@@ -1218,46 +1608,272 @@ class PlaylistPage(Adw.Bin):
         if getattr(self, "_is_background_fetching", False):
             self._pending_queue_append = True
 
+    # ── Multi-select ──────────────────────────────────────────────────────────
+
+    def _on_select_toggled(self, btn):
+        self._multi_select_mode = btn.get_active()
+        if self._multi_select_mode:
+            self._selected_video_ids = set()
+            self.selection_bar.set_visible(True)
+            self.sel_remove_btn.set_visible(self.is_owned)
+            self._refresh_sel_add_menu()
+            self._update_selection_count()
+        else:
+            self._selected_video_ids = set()
+            self.selection_bar.set_visible(False)
+        self._refresh_all_row_visuals()
+
+    def _toggle_track_selection(self, video_id, row=None):
+        if not video_id:
+            return
+        if video_id in self._selected_video_ids:
+            self._selected_video_ids.discard(video_id)
+        else:
+            self._selected_video_ids.add(video_id)
+        self._update_selection_count()
+        if row:
+            is_sel = video_id in self._selected_video_ids
+            self._apply_row_selection(row, is_sel)
+
+    def _apply_row_selection(self, row, selected):
+        if selected:
+            row.add_css_class("selected")
+        else:
+            row.remove_css_class("selected")
+        if hasattr(row, '_lv_check'):
+            if hasattr(row, '_lv_check_handler') and row._lv_check_handler:
+                row._lv_check.disconnect(row._lv_check_handler)
+                row._lv_check_handler = None
+            row._lv_check.set_active(selected)
+            vid = getattr(row, '_lv_full_track', {}).get("videoId") if hasattr(row, '_lv_full_track') and row._lv_full_track else None
+            if vid:
+                row._lv_check_handler = row._lv_check.connect(
+                    "toggled", lambda cb, v=vid, r=row: self._toggle_track_selection(v, r)
+                )
+
+    def _refresh_all_row_visuals(self):
+        """Walk all visible ListView rows and update checkbox/highlight state."""
+        child = self.songs_list.get_first_child()
+        while child:
+            # child is the list row, its first child is the Adw.Bin
+            bin_w = child.get_first_child() if child else None
+            row = getattr(bin_w, '_lv_track_ui', None) if bin_w else None
+            if row and hasattr(row, '_lv_full_track') and row._lv_full_track:
+                vid = row._lv_full_track.get("videoId")
+                is_sel = vid in self._selected_video_ids if vid else False
+                if self._multi_select_mode:
+                    row._lv_check.set_visible(True)
+                    self._apply_row_selection(row, is_sel)
+                else:
+                    row._lv_check.set_visible(False)
+                    row.remove_css_class("selected")
+            child = child.get_next_sibling()
+
+    def _get_visible_tracks(self):
+        """Returns the tracks that should be considered 'visible' for selection.
+        With a search filter: the filtered matches from the track_store.
+        Without a filter: all available data (original_tracks if fully fetched,
+        otherwise current_tracks)."""
+        if self.current_filter_text:
+            tracks = []
+            for i in range(self.track_store.get_n_items()):
+                item = self.track_store.get_item(i)
+                if item and hasattr(item, 'data'):
+                    tracks.append(item.data)
+            return tracks
+        # No filter: use the most complete dataset available
+        if hasattr(self, "original_tracks") and self.original_tracks:
+            return self.original_tracks
+        return self.current_tracks
+
+    def _select_all(self):
+        """Select all tracks matching the current filter/search/sort."""
+        for t in self._get_visible_tracks():
+            vid = t.get("videoId")
+            if vid:
+                self._selected_video_ids.add(vid)
+        self._update_selection_count()
+        self._refresh_all_row_visuals()
+
+    def _deselect_all(self):
+        self._selected_video_ids.clear()
+        self._update_selection_count()
+        self._refresh_all_row_visuals()
+
+    def _update_selection_count(self):
+        count = len(getattr(self, '_selected_video_ids', set()))
+        total = len(self._get_visible_tracks())
+        self.selection_count_label.set_label(f"{count} of {total} selected")
+
+    def _get_selected_tracks(self):
+        """Returns selected tracks in current sort order."""
+        all_tracks = self.original_tracks if hasattr(self, "original_tracks") and self.original_tracks else self.current_tracks
+        selected = [t for t in all_tracks if t.get("videoId") in self._selected_video_ids]
+        return self._sort_tracks(selected)
+
+    def _refresh_sel_add_menu(self):
+        self.sel_add_menu.remove_all()
+        playlists = self.client.get_editable_playlists()
+        for p in playlists:
+            title = p.get("title", "Untitled")
+            pid = p.get("playlistId")
+            if pid:
+                self.sel_add_menu.append(title, f"page.sel_add_to_playlist('{pid}')")
+
+    def _on_sel_play(self, btn):
+        tracks = self._get_selected_tracks()
+        if tracks:
+            self.player.set_queue(tracks, 0)
+
+    def _on_sel_add_to_playlist(self, action, param):
+        target_pid = param.get_string()
+        tracks = self._get_selected_tracks()
+        video_ids = [t.get("videoId") for t in tracks if t.get("videoId")]
+        if not video_ids:
+            return
+
+        def thread_func():
+            success = self.client.add_playlist_items(target_pid, video_ids)
+            msg = f"Added {len(video_ids)} tracks to playlist" if success else "Failed to add tracks"
+            GLib.idle_add(self._show_toast, msg)
+
+        threading.Thread(target=thread_func, daemon=True).start()
+
+    def _on_sel_remove(self, btn):
+        tracks = self._get_selected_tracks()
+        to_remove = [
+            {"videoId": t.get("videoId"), "setVideoId": t.get("setVideoId")}
+            for t in tracks
+            if t.get("videoId") and t.get("setVideoId")
+        ]
+        if not to_remove:
+            return
+
+        def thread_func():
+            success = self.client.remove_playlist_items(self.playlist_id, to_remove)
+            if success:
+                GLib.idle_add(self._show_toast, f"Removed {len(to_remove)} tracks")
+                GLib.idle_add(self.load_playlist, self.playlist_id)
+            else:
+                GLib.idle_add(self._show_toast, "Failed to remove tracks")
+
+        threading.Thread(target=thread_func, daemon=True).start()
+
+    def _copy_selection_debug(self):
+        """Copy selected track data to clipboard for debugging."""
+        import json
+        tracks = self._get_selected_tracks()
+        debug_data = {
+            "selected_count": len(tracks),
+            "selected_video_ids": sorted(self._selected_video_ids),
+            "current_tracks_count": len(self.current_tracks),
+            "original_tracks_count": len(getattr(self, "original_tracks", [])),
+            "tracks": [
+                {
+                    "videoId": t.get("videoId"),
+                    "title": t.get("title"),
+                    "artists": [a.get("name") for a in t.get("artists", [])],
+                    "setVideoId": t.get("setVideoId"),
+                    "duration_seconds": t.get("duration_seconds"),
+                }
+                for t in tracks
+            ],
+        }
+        text = json.dumps(debug_data, indent=2, ensure_ascii=False)
+        clipboard = Gdk.Display.get_default().get_clipboard()
+        clipboard.set(text)
+        self._show_toast(f"Copied debug data for {len(tracks)} tracks")
+
     # ── Sort ──────────────────────────────────────────────────────────────────
+
+    def _on_sort_dir_clicked(self, btn):
+        self._sort_descending = not self._sort_descending
+        btn.set_icon_name(
+            "view-sort-descending-symbolic" if self._sort_descending else "view-sort-ascending-symbolic"
+        )
+        self.reorder_playlist(self.sort_dropdown.get_selected())
 
     def on_sort_changed(self, dropdown, pspec):
         self.reorder_playlist(dropdown.get_selected())
 
-    def reorder_playlist(self, sort_type):
-        if not self.current_tracks:
-            return
-
+    def _sort_tracks(self, tracks):
+        """Sort a list of track dicts according to current sort dropdown and direction."""
+        sort_type = self.sort_dropdown.get_selected()
+        reverse = getattr(self, '_sort_descending', False)
+        result = list(tracks)
         if sort_type == 0:
-            if hasattr(self, "original_tracks") and self.original_tracks:
-                self.current_tracks = list(self.original_tracks)
-            else:
-                return
+            if reverse:
+                result.reverse()
         elif sort_type == 1:
-            self.current_tracks.sort(key=lambda x: x.get("title", "").lower())
+            result.sort(key=lambda x: x.get("title", "").lower(), reverse=reverse)
         elif sort_type == 2:
-            self.current_tracks.sort(
+            result.sort(
                 key=lambda x: (
                     x.get("artists", [{}])[0].get("name", "").lower()
-                    if x.get("artists")
-                    else "",
+                    if x.get("artists") else "",
                     x.get("title", "").lower(),
-                )
+                ), reverse=reverse,
             )
         elif sort_type == 3:
-            self.current_tracks.sort(
+            result.sort(
                 key=lambda x: (
                     x.get("album", {}).get("name", "").lower()
                     if isinstance(x.get("album"), dict)
                     else str(x.get("album") or "").lower(),
                     x.get("title", "").lower(),
-                )
+                ), reverse=reverse,
+            )
+        elif sort_type == 4:
+            result.sort(key=lambda x: x.get("duration_seconds", 0), reverse=reverse)
+        return result
+
+    def reorder_playlist(self, sort_type):
+        # Sort all data (original_tracks), not just the lazy-loaded subset
+        source = list(self.original_tracks) if hasattr(self, "original_tracks") and self.original_tracks else list(self.current_tracks)
+        if not source:
+            return
+
+        reverse = getattr(self, '_sort_descending', False)
+
+        if sort_type == 0:
+            if not reverse:
+                # Default order: restore original
+                source = list(self.original_tracks) if hasattr(self, "original_tracks") and self.original_tracks else source
+            else:
+                source = list(reversed(self.original_tracks)) if hasattr(self, "original_tracks") and self.original_tracks else source
+        elif sort_type == 1:
+            source.sort(key=lambda x: x.get("title", "").lower(), reverse=reverse)
+        elif sort_type == 2:
+            source.sort(
+                key=lambda x: (
+                    x.get("artists", [{}])[0].get("name", "").lower()
+                    if x.get("artists")
+                    else "",
+                    x.get("title", "").lower(),
+                ),
+                reverse=reverse,
+            )
+        elif sort_type == 3:
+            source.sort(
+                key=lambda x: (
+                    x.get("album", {}).get("name", "").lower()
+                    if isinstance(x.get("album"), dict)
+                    else str(x.get("album") or "").lower(),
+                    x.get("title", "").lower(),
+                ),
+                reverse=reverse,
             )
         elif sort_type == 4:  # Duration
-            self.current_tracks.sort(key=lambda x: x.get("duration_seconds", 0))
+            source.sort(key=lambda x: x.get("duration_seconds", 0), reverse=reverse)
 
-        self._clear_track_store()
-        for t in self.current_tracks:
-            self._add_track_row(t)
+        self.current_tracks = source
+        # Re-apply active filter if any, otherwise show all
+        if self.current_filter_text:
+            self.filter_content(self.current_filter_text)
+        else:
+            self._clear_track_store()
+            for t in self.current_tracks:
+                self._add_track_row(t)
 
     # ── Right-click ───────────────────────────────────────────────────────────
 
@@ -1268,106 +1884,187 @@ class PlaylistPage(Adw.Bin):
 
         data = row._lv_video_data
         full_track_data = row._lv_full_track
+        vid = data.get("id") or data.get("videoId")
 
         group = Gio.SimpleActionGroup()
-        row.insert_action_group("row", group)
-
-        def copy_link_action(action, param):
-            vid = data.get("id")
-            if vid:
-                clipboard = Gdk.Display.get_default().get_clipboard()
-                clipboard.set(f"https://music.youtube.com/watch?v={vid}")
-
-        def goto_artist_action(action, param):
-            if full_track_data and "artists" in full_track_data:
-                artist = full_track_data["artists"][0]
-                aid = artist.get("id")
-                name = artist.get("name")
-                if aid:
-                    root = self.get_root()
-                    if hasattr(root, "open_artist"):
-                        root.open_artist(aid, name)
-
-        for name, cb in [
-            ("copy_link", copy_link_action),
-            ("goto_artist", goto_artist_action),
-        ]:
-            a = Gio.SimpleAction.new(name, None)
-            a.connect("activate", cb)
-            group.add_action(a)
+        row.insert_action_group("ctx", group)
 
         menu_model = Gio.Menu()
-        if data.get("id"):
-            menu_model.append("Copy Link", "row.copy_link")
-            menu_model.append("Go to Artist", "row.goto_artist")
 
-        # Remove from Playlist
-        if self.is_owned and data.get("setVideoId") and data.get("id"):
-            menu_model.append("Remove from Playlist", "row.remove_from_playlist")
+        # ── Section: Navigation ──
+        nav_section = Gio.Menu()
+        if full_track_data and full_track_data.get("artists"):
+            artist = full_track_data["artists"][0]
+            if artist.get("id"):
+                nav_section.append("Go to Artist", "ctx.goto_artist")
+                a = Gio.SimpleAction.new("goto_artist", None)
+                a.connect("activate", lambda act, p: (
+                    self.get_root().open_artist(artist["id"], artist.get("name"))
+                    if hasattr(self.get_root(), "open_artist") else None
+                ))
+                group.add_action(a)
 
-            def remove_from_playlist_cb(action, param):
-                track_vid = data.get("id")
-                track_set_vid = data.get("setVideoId")
+        if nav_section.get_n_items() > 0:
+            menu_model.append_section(None, nav_section)
 
-                # Perform background remove
-                def remove_thread_func():
-                    track_to_remove = {
-                        "videoId": track_vid,
-                        "setVideoId": track_set_vid,
-                    }
-                    success = self.client.remove_playlist_items(
-                        self.playlist_id, [track_to_remove]
-                    )
-                    if success:
-                        print(f"Removed track {track_vid} from {self.playlist_id}")
-                        # Refresh playlist UI
-                        GLib.idle_add(self.load_playlist, self.playlist_id)
-                    else:
-                        print(f"Failed to remove track from {self.playlist_id}")
+        # ── Section: Actions ──
+        has_selection = self._multi_select_mode and self._selected_video_ids
+        action_section = Gio.Menu()
 
-                threading.Thread(target=remove_thread_func, daemon=True).start()
+        # Start Radio (single song only, not for multi-select)
+        if vid and not has_selection:
+            action_section.append("Start Radio", "ctx.start_radio")
+            a_radio = Gio.SimpleAction.new("start_radio", None)
+            a_radio.connect("activate", lambda act, p, v=vid: (
+                self.player.start_radio(video_id=v),
+                self._show_toast("Starting radio..."),
+            ))
+            group.add_action(a_radio)
 
-            a_remove = Gio.SimpleAction.new("remove_from_playlist", None)
-            a_remove.connect("activate", remove_from_playlist_cb)
-            group.add_action(a_remove)
-
-        # Add to Playlist Submenu
-        vid = data.get("id") or data.get("videoId")
-        if vid:
-            # Re-fetch editable playlists from client (should be cached)
+        if has_selection or vid:
             playlists = self.client.get_editable_playlists()
             if playlists:
+                label = f"Add {len(self._selected_video_ids)} to Playlist" if has_selection else "Add to Playlist"
                 playlist_menu = Gio.Menu()
-                # Sort by title
-                sorted_playlists = sorted(
-                    playlists, key=lambda x: x.get("title", "").lower()
-                )
-                for p in sorted_playlists:
-                    p_title = p.get("title", "Unknown")
-                    p_id = p.get("playlistId")
-                    if p_id:
-                        playlist_menu.append(p_title, f"row.add_to_playlist('{p_id}')")
-                menu_model.append_submenu("Add to Playlist", playlist_menu)
+                for p in sorted(playlists, key=lambda x: x.get("title", "").lower()):
+                    pid = p.get("playlistId")
+                    if pid:
+                        playlist_menu.append(p.get("title", "?"), f"ctx.add_to_playlist('{pid}')")
+                action_section.append_submenu(label, playlist_menu)
 
-                # Add the action to the group
-                def add_to_playlist_cb(action, param):
+                a_add = Gio.SimpleAction.new("add_to_playlist", GLib.VariantType.new("s"))
+                def _do_add(act, param):
                     target_pid = param.get_string()
-
-                    # Perform background add
-                    def thread_func():
-                        success = self.client.add_playlist_items(target_pid, [vid])
-                        if success:
-                            print(f"Added {vid} to {target_pid}")
-                        else:
-                            print(f"Failed to add {vid} to {target_pid}")
-
-                    threading.Thread(target=thread_func, daemon=True).start()
-
-                a_add = Gio.SimpleAction.new(
-                    "add_to_playlist", GLib.VariantType.new("s")
-                )
-                a_add.connect("activate", add_to_playlist_cb)
+                    if has_selection:
+                        vids = [t.get("videoId") for t in self._get_selected_tracks() if t.get("videoId")]
+                    else:
+                        vids = [vid] if vid else []
+                    if vids:
+                        n = len(vids)
+                        threading.Thread(
+                            target=lambda: (
+                                self.client.add_playlist_items(target_pid, vids),
+                                GLib.idle_add(self._show_toast, f"Added {n} track{'s' if n > 1 else ''} to playlist"),
+                            ),
+                            daemon=True,
+                        ).start()
+                a_add.connect("activate", _do_add)
                 group.add_action(a_add)
+
+        if self.is_owned:
+            if has_selection:
+                action_section.append(f"Remove {len(self._selected_video_ids)} from Playlist", "ctx.remove")
+                a_rm = Gio.SimpleAction.new("remove", None)
+                def _do_remove_sel(act, p):
+                    tracks = self._get_selected_tracks()
+                    to_remove = [
+                        {"videoId": t.get("videoId"), "setVideoId": t.get("setVideoId")}
+                        for t in tracks if t.get("videoId") and t.get("setVideoId")
+                    ]
+                    if to_remove:
+                        n = len(to_remove)
+                        threading.Thread(
+                            target=lambda: (
+                                self.client.remove_playlist_items(self.playlist_id, to_remove),
+                                GLib.idle_add(self._show_toast, f"Removed {n} tracks"),
+                                GLib.idle_add(self.load_playlist, self.playlist_id),
+                            ),
+                            daemon=True,
+                        ).start()
+                a_rm.connect("activate", _do_remove_sel)
+                group.add_action(a_rm)
+            elif data.get("setVideoId") and vid:
+                action_section.append("Remove from Playlist", "ctx.remove")
+                a_rm = Gio.SimpleAction.new("remove", None)
+                a_rm.connect("activate", lambda act, p, v=vid, sv=data["setVideoId"]: (
+                    threading.Thread(
+                        target=lambda: (
+                            self.client.remove_playlist_items(self.playlist_id, [{"videoId": v, "setVideoId": sv}]),
+                            GLib.idle_add(self.load_playlist, self.playlist_id),
+                        ),
+                        daemon=True,
+                    ).start()
+                ))
+                group.add_action(a_rm)
+
+        # Delete uploaded song (for UPLOAD pseudo-playlists)
+        is_upload_playlist = self.playlist_id and self.playlist_id.startswith("UPLOAD")
+        if is_upload_playlist and full_track_data and full_track_data.get("entityId"):
+            entity_id = full_track_data["entityId"]
+            track_title = full_track_data.get("title", "this song")
+            action_section.append("Delete Upload", "ctx.delete_upload")
+            a_del = Gio.SimpleAction.new("delete_upload", None)
+            def _do_delete_upload(act, p, eid=entity_id, t=track_title):
+                dialog = Adw.MessageDialog(
+                    transient_for=self.get_root(),
+                    heading="Delete Upload?",
+                    body=f'Are you sure you want to delete "{t}"?\nThis cannot be undone.',
+                )
+                dialog.add_response("cancel", "Cancel")
+                dialog.add_response("delete", "Delete")
+                dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+                dialog.set_default_response("cancel")
+                dialog.set_close_response("cancel")
+                def on_resp(dg, resp):
+                    if resp == "delete":
+                        def _thread():
+                            self.client.delete_upload_entity(eid)
+                            GLib.idle_add(self._show_toast, f"Deleted {t}")
+                            # Remove from local data
+                            GLib.idle_add(self._remove_track_by_entity_id, eid)
+                        threading.Thread(target=_thread, daemon=True).start()
+                    dg.destroy()
+                dialog.connect("response", on_resp)
+                dialog.present()
+            a_del.connect("activate", _do_delete_upload)
+            group.add_action(a_del)
+
+        if action_section.get_n_items() > 0:
+            menu_model.append_section(None, action_section)
+
+        # ── Section: Selection (only in multi-select mode) ──
+        if self._multi_select_mode:
+            sel_section = Gio.Menu()
+            is_selected = vid in self._selected_video_ids if vid else False
+            if is_selected:
+                sel_section.append("Deselect This", "ctx.toggle_sel")
+            else:
+                sel_section.append("Select This", "ctx.toggle_sel")
+            sel_section.append("Select All", "ctx.select_all")
+            sel_section.append("Deselect All", "ctx.deselect_all")
+
+            a_toggle = Gio.SimpleAction.new("toggle_sel", None)
+            a_toggle.connect("activate", lambda act, p, v=vid, r=row: self._toggle_track_selection(v, r))
+            group.add_action(a_toggle)
+
+            a_sel_all = Gio.SimpleAction.new("select_all", None)
+            a_sel_all.connect("activate", lambda act, p: self._select_all())
+            group.add_action(a_sel_all)
+
+            a_desel = Gio.SimpleAction.new("deselect_all", None)
+            a_desel.connect("activate", lambda act, p: self._deselect_all())
+            group.add_action(a_desel)
+
+            menu_model.append_section(None, sel_section)
+
+        # ── Section: Clipboard / Debug ──
+        clip_section = Gio.Menu()
+        if vid:
+            clip_section.append("Copy Song Link", "ctx.copy_link")
+            a_copy = Gio.SimpleAction.new("copy_link", None)
+            a_copy.connect("activate", lambda act, p, v=vid: (
+                Gdk.Display.get_default().get_clipboard().set(f"https://music.youtube.com/watch?v={v}")
+            ))
+            group.add_action(a_copy)
+
+        if self._multi_select_mode and self._selected_video_ids:
+            clip_section.append("Copy Selection Data (Debug)", "ctx.copy_debug")
+            a_debug = Gio.SimpleAction.new("copy_debug", None)
+            a_debug.connect("activate", lambda act, p: self._copy_selection_debug())
+            group.add_action(a_debug)
+
+        if clip_section.get_n_items() > 0:
+            menu_model.append_section(None, clip_section)
 
         if menu_model.get_n_items() > 0:
             popover = Gtk.PopoverMenu.new_from_model(menu_model)
@@ -1382,6 +2079,32 @@ class PlaylistPage(Adw.Bin):
             popover.popup()
 
     # ── Meta link ─────────────────────────────────────────────────────────────
+
+    def _on_read_more_clicked(self, label, uri):
+        # Defer to avoid modifying the label during signal emission (causes segfault)
+        GLib.idle_add(self._toggle_description)
+        return True
+
+    def _toggle_description(self):
+        self._description_expanded = not self._description_expanded
+        if self._description_expanded:
+            self.description_label.set_label(self._full_description)
+            text = "Show less"
+        else:
+            truncated = self._full_description[:200].rsplit(" ", 1)[0] + "..."
+            self.description_label.set_label(truncated)
+            text = "Read more"
+        # Replace the label to avoid GTK's visited link color
+        parent = self.read_more_btn.get_parent()
+        parent.remove(self.read_more_btn)
+        self.read_more_btn = Gtk.Label()
+        self.read_more_btn.set_use_markup(True)
+        self.read_more_btn.set_markup(f"<a href='toggle'>{text}</a>")
+        self.read_more_btn.add_css_class("caption")
+        self.read_more_btn.set_halign(Gtk.Align.START)
+        self.read_more_btn.connect("activate-link", self._on_read_more_clicked)
+        parent.append(self.read_more_btn)
+        return False
 
     def on_meta_link_activated(self, label, uri):
         if uri.startswith("artist:"):
@@ -1771,6 +2494,16 @@ class PlaylistPage(Adw.Bin):
     # ── Compact mode ──────────────────────────────────────────────────────────
 
     def set_compact_mode(self, compact):
+        # Propagate compact to all song row images
+        self._compact = compact
+        child = self.songs_list.get_first_child()
+        while child:
+            bin_w = child.get_first_child() if child else None
+            row = getattr(bin_w, '_lv_track_ui', None) if bin_w else None
+            if row and hasattr(row, '_lv_img') and hasattr(row._lv_img, 'set_compact'):
+                row._lv_img.set_compact(compact)
+            child = child.get_next_sibling()
+
         if compact:
             self.add_css_class("compact")
             self.header_info_box.set_orientation(Gtk.Orientation.VERTICAL)

@@ -1,4 +1,5 @@
-from gi.repository import Gtk, Adw, GObject, GLib, Pango
+import threading
+from gi.repository import Gtk, Adw, GObject, GLib, Pango, Gdk, Gio
 from ui.utils import AsyncPicture, LikeButton, MarqueeLabel
 from ui.queue_panel import QueuePanel
 
@@ -124,6 +125,30 @@ class ExpandedPlayer(Gtk.Box):
         self.like_btn.set_visible(False)
         self.like_btn.set_valign(Gtk.Align.CENTER)
 
+        # More menu (3-dot)
+        self.more_menu_model = Gio.Menu()
+        self.more_btn = Gtk.MenuButton(icon_name="view-more-symbolic")
+        self.more_btn.add_css_class("flat")
+        self.more_btn.add_css_class("circular")
+        self.more_btn.set_valign(Gtk.Align.CENTER)
+        self.more_btn.set_menu_model(self.more_menu_model)
+
+        # Action group for the more menu
+        self.ep_action_group = Gio.SimpleActionGroup()
+        self.insert_action_group("ep", self.ep_action_group)
+
+        a_add = Gio.SimpleAction.new("add_to_playlist", GLib.VariantType.new("s"))
+        a_add.connect("activate", self._on_add_to_playlist)
+        self.ep_action_group.add_action(a_add)
+
+        a_radio = Gio.SimpleAction.new("start_radio", None)
+        a_radio.connect("activate", self._on_start_radio)
+        self.ep_action_group.add_action(a_radio)
+
+        a_copy = Gio.SimpleAction.new("copy_link", None)
+        a_copy.connect("activate", self._on_copy_link)
+        self.ep_action_group.add_action(a_copy)
+
         meta_row.append(text_box)
         meta_row.append(self.like_btn)
         main_box.append(meta_row)
@@ -199,14 +224,8 @@ class ExpandedPlayer(Gtk.Box):
         self.prev_btn.set_valign(Gtk.Align.CENTER)
         self.prev_btn.connect("clicked", lambda x: self.player.previous())
 
-        # Balancer button to keep things centered
-        self.balancer_btn = Gtk.Button(icon_name="view-more-symbolic")
-        self.balancer_btn.add_css_class("flat")
-        self.balancer_btn.add_css_class("circular")
-        self.balancer_btn.set_valign(Gtk.Align.CENTER)
-        self.balancer_btn.set_opacity(0.15) # Barely visible placeholder
-        self.balancer_btn.set_receives_default(False)
-        self.balancer_btn.set_can_focus(False)
+        # 3-dot menu button (balances vol_btn on the left)
+        self.more_btn.set_valign(Gtk.Align.CENTER)
 
         self.play_btn = Gtk.Button()
         self.play_btn.set_size_request(64, 64)
@@ -239,7 +258,7 @@ class ExpandedPlayer(Gtk.Box):
         controls_box.append(self.prev_btn)
         controls_box.append(self.play_btn)
         controls_box.append(self.next_btn)
-        controls_box.append(self.balancer_btn)
+        controls_box.append(self.more_btn)
         main_box.append(controls_box)
 
         self.player_scroll.set_child(main_box)
@@ -288,6 +307,11 @@ class ExpandedPlayer(Gtk.Box):
 
     def _on_map(self, widget):
         GLib.idle_add(self._center_carousel)
+        # Sync like status from current queue track (may have been missed before map)
+        if self.player.current_video_id and 0 <= self.player.current_queue_index < len(self.player.queue):
+            track = self.player.queue[self.player.current_queue_index]
+            like_status = track.get("likeStatus", "INDIFFERENT")
+            self.like_btn.set_data(self.player.current_video_id, like_status)
 
     def _center_carousel(self):
         self._ignore_page_change = True
@@ -314,6 +338,9 @@ class ExpandedPlayer(Gtk.Box):
             self.like_btn.set_visible(True)
         else:
             self.like_btn.set_visible(False)
+
+        # Refresh the more menu for the new track
+        self._refresh_more_menu()
 
         # Preload neighbor covers and sync queue
         self._sync_carousel_queue()
@@ -477,14 +504,18 @@ class ExpandedPlayer(Gtk.Box):
         self.play_icon.set_from_icon_name(icon)
 
     def on_volume_scale_changed(self, scale):
+        if getattr(self, '_updating_volume', False):
+            return
         self.player.set_volume(scale.get_value())
 
     def on_volume_changed(self, player, volume, muted):
-        # Use apparent volume (0 if muted) for the scale to match MPRIS
         display_volume = 0.0 if muted else volume
 
-        if abs(self.volume_scale.get_value() - display_volume) > 0.01:
-            self.volume_scale.set_value(display_volume)
+        # Guard against feedback loop: set_value triggers value-changed
+        # which calls set_volume which emits volume-changed again
+        self._updating_volume = True
+        self.volume_scale.set_value(display_volume)
+        self._updating_volume = False
 
         # Update Icon
         if muted or volume == 0:
@@ -518,6 +549,72 @@ class ExpandedPlayer(Gtk.Box):
 
     # --- ADW.CAROUSEL GESTURE HANDLERS ---
 
+    # ── More menu (3-dot) handlers ──────────────────────────────────────────
+
+    def _refresh_more_menu(self):
+        self.more_menu_model.remove_all()
+
+        vid = self.player.current_video_id
+
+        action_section = Gio.Menu()
+
+        # Start Radio
+        if vid:
+            action_section.append("Start Radio", "ep.start_radio")
+
+        # Add to Playlist
+        if vid:
+            playlists = self.player.client.get_editable_playlists()
+            if playlists:
+                playlist_menu = Gio.Menu()
+                for p in sorted(playlists, key=lambda x: x.get("title", "").lower()):
+                    pid = p.get("playlistId")
+                    if pid:
+                        playlist_menu.append(p.get("title", "?"), f"ep.add_to_playlist('{pid}')")
+                action_section.append_submenu("Add to Playlist", playlist_menu)
+
+        if action_section.get_n_items() > 0:
+            self.more_menu_model.append_section(None, action_section)
+
+        # Clipboard
+        if vid:
+            clip_section = Gio.Menu()
+            clip_section.append("Copy Song Link", "ep.copy_link")
+            self.more_menu_model.append_section(None, clip_section)
+
+    def _on_add_to_playlist(self, action, param):
+        target_pid = param.get_string()
+        vid = self.player.current_video_id
+        if not target_pid or not vid:
+            return
+
+        def _thread():
+            success = self.player.client.add_playlist_items(target_pid, [vid])
+            msg = "Added to playlist" if success else "Failed to add"
+            GLib.idle_add(self._show_toast, msg)
+
+        threading.Thread(target=_thread, daemon=True).start()
+
+    def _on_start_radio(self, action, param):
+        vid = self.player.current_video_id
+        if vid:
+            self.player.start_radio(video_id=vid)
+
+    def _on_copy_link(self, action, param):
+        vid = self.player.current_video_id
+        if vid:
+            Gdk.Display.get_default().get_clipboard().set(
+                f"https://music.youtube.com/watch?v={vid}"
+            )
+            self._show_toast("Link copied")
+
+    def _show_toast(self, message):
+        root = self.get_root()
+        if root and hasattr(root, "add_toast"):
+            root.add_toast(message)
+
+    # ── Carousel gesture handlers ─────────────────────────────────────────
+
     def _on_carousel_position_changed(self, carousel, param):
         if getattr(self, "_ignore_page_change", False):
             return
@@ -546,6 +643,11 @@ class ExpandedPlayer(Gtk.Box):
             if 0 <= new_idx < len(self.player.queue):
 
                 def _do_jump(jump_idx):
+                    # Guard: don't override if the player is already loading a different track
+                    # (e.g. carousel settling after a programmatic queue change)
+                    if self.player._is_loading:
+                        self._ignore_page_change = False
+                        return False
                     self.player.current_queue_index = jump_idx
                     self.player._play_current_index()
                     self.player.emit("state-changed", "queue-updated")

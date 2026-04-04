@@ -174,6 +174,8 @@ class QueuePanel(Gtk.Box):
         self.toolbar_view = Adw.ToolbarView()
         self.header_bar = Adw.HeaderBar()
         self.header_bar.add_css_class("flat")
+        self.header_bar.set_show_end_title_buttons(False)
+        self.header_bar.set_show_start_title_buttons(False)
         
         # Title/Subtitle in HeaderBar
         title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -229,11 +231,10 @@ class QueuePanel(Gtk.Box):
         self.append(self.toolbar_view)
 
 
-        # ListView Setup
+        # ListView Setup — use NoSelection to avoid selection-changed race conditions.
+        # User clicks are handled via explicit gesture in factory setup.
         self.store = Gio.ListStore(item_type=QueueItem)
-        self.selection_model = Gtk.SingleSelection(model=self.store)
-        self.selection_model.set_autoselect(False)
-        self.selection_model.connect("selection-changed", self._on_selection_changed)
+        self.selection_model = Gtk.NoSelection(model=self.store)
 
         factory = Gtk.SignalListItemFactory()
         factory.connect("setup", self._on_factory_setup)
@@ -250,8 +251,6 @@ class QueuePanel(Gtk.Box):
         self.player.connect("state-changed", self._on_player_update)
         self.player.connect("metadata-changed", self._on_player_update)
         self.connect("map", self._on_map)  # Refresh when visible
-
-        self._programmatic_update = False
 
         # Initial Populate
         self._populate()
@@ -301,10 +300,7 @@ class QueuePanel(Gtk.Box):
     def _scroll_to_current(self):
         idx = self.player.current_queue_index
         if idx >= 0 and idx < self.store.get_n_items():
-            # Scroll to item
-            self.list_view.scroll_to(
-                idx, Gtk.ListScrollFlags.FOCUS | Gtk.ListScrollFlags.SELECT, None
-            )
+            self.list_view.scroll_to(idx, Gtk.ListScrollFlags.FOCUS, None)
 
     def _on_shuffle_clicked(self, btn):
         self.player.shuffle_queue()
@@ -341,53 +337,132 @@ class QueuePanel(Gtk.Box):
             self.player.set_repeat_mode("none")
 
     def _populate(self):
-        self._programmatic_update = True
-        try:
-            queue = self.player.queue
-            current_idx = self.player.current_queue_index
+        queue = self.player.queue
+        current_idx = self.player.current_queue_index
 
-            items = []
-            player_state = self.player.get_state_string()
-            is_paused = player_state in ("paused", "stopped")
+        items = []
+        player_state = self.player.get_state_string()
+        is_paused = player_state in ("paused", "stopped")
 
-            for i, track in enumerate(queue):
-                items.append(QueueItem(track, i, i == current_idx, is_paused))
+        for i, track in enumerate(queue):
+            items.append(QueueItem(track, i, i == current_idx, is_paused))
 
-            self.store.splice(0, self.store.get_n_items(), items)
-            self._last_queue_len = len(queue)
-            
-            # Update count label
-            self.count_label.set_label(f"{len(queue)} tracks")
+        self.store.splice(0, self.store.get_n_items(), items)
+        self.count_label.set_label(f"{len(queue)} tracks")
 
-            # Restore selection to current index
-            if current_idx >= 0 and current_idx < len(items):
-                self.selection_model.set_selected(current_idx)
-
-            if self.get_mapped():
-                GLib.idle_add(self._scroll_to_current)
-        finally:
-            self._programmatic_update = False
+        if self.get_mapped():
+            GLib.idle_add(self._scroll_to_current)
 
     def _on_factory_setup(self, factory, list_item):
         widget = QueueRowWidget()
         list_item.set_child(widget)
+
+        # Left click for activation
+        gesture = Gtk.GestureClick()
+        gesture.set_button(1)
+        gesture.connect("released", self._on_row_clicked, list_item)
+        widget.add_controller(gesture)
+
+        # Right click for context menu
+        right_click = Gtk.GestureClick()
+        right_click.set_button(3)
+        right_click.connect("released", self._on_row_right_click, list_item)
+        widget.add_controller(right_click)
+
+        # Long press for touch
+        lp = Gtk.GestureLongPress()
+        lp.connect("pressed", lambda g, x, y, li=list_item: self._on_row_right_click(g, 1, x, y, li))
+        widget.add_controller(lp)
 
     def _on_factory_bind(self, factory, list_item):
         widget = list_item.get_child()
         item = list_item.get_item()
         widget.bind(item, self)
 
-    def _on_selection_changed(self, model, position, n_items):
-        if self._programmatic_update:
+    def _on_row_clicked(self, gesture, n_press, x, y, list_item):
+        item = list_item.get_item()
+        if item and item.index != self.player.current_queue_index:
+            self.player.play_queue_index(item.index)
+
+    def _on_row_right_click(self, gesture, n_press, x, y, list_item):
+        item = list_item.get_item()
+        if not item:
             return
 
-        item = model.get_selected_item()
-        if item:
-            # Prevent re-playing current track if clicked
-            if item.index == self.player.current_queue_index:
-                return
+        track = item.track
+        vid = track.get("videoId")
+        idx = item.index
+        widget = list_item.get_child()
 
-            self.player.play_queue_index(item.index)
+        group = Gio.SimpleActionGroup()
+        widget.insert_action_group("q", group)
+
+        menu = Gio.Menu()
+
+        # Actions section
+        action_section = Gio.Menu()
+
+        # Start Radio
+        if vid:
+            action_section.append("Start Radio", "q.start_radio")
+            a_radio = Gio.SimpleAction.new("start_radio", None)
+            a_radio.connect("activate", lambda a, p, v=vid: self.player.start_radio(video_id=v))
+            group.add_action(a_radio)
+
+        # Add to Playlist
+        if vid:
+            playlists = self.player.client.get_editable_playlists()
+            if playlists:
+                playlist_menu = Gio.Menu()
+                for pl in sorted(playlists, key=lambda x: x.get("title", "").lower()):
+                    pid = pl.get("playlistId")
+                    if pid:
+                        playlist_menu.append(pl.get("title", "?"), f"q.add_to_playlist('{pid}')")
+                action_section.append_submenu("Add to Playlist", playlist_menu)
+
+                a_add = Gio.SimpleAction.new("add_to_playlist", GLib.VariantType.new("s"))
+                def _do_add(act, param, v=vid):
+                    target_pid = param.get_string()
+                    def _thread():
+                        success = self.player.client.add_playlist_items(target_pid, [v])
+                        if success:
+                            GLib.idle_add(self._show_toast, "Added to playlist")
+                        else:
+                            GLib.idle_add(self._show_toast, "Failed to add")
+                    threading.Thread(target=_thread, daemon=True).start()
+                a_add.connect("activate", _do_add)
+                group.add_action(a_add)
+
+        # Remove from Queue
+        action_section.append("Remove from Queue", "q.remove")
+        a_remove = Gio.SimpleAction.new("remove", None)
+        a_remove.connect("activate", lambda a, p, i=idx: self.player.remove_from_queue(i))
+        group.add_action(a_remove)
+
+        menu.append_section(None, action_section)
+
+        # Clipboard section
+        if vid:
+            clip_section = Gio.Menu()
+            clip_section.append("Copy Link", "q.copy_link")
+            a_copy = Gio.SimpleAction.new("copy_link", None)
+            def _copy_link(a, p, v=vid):
+                Gdk.Display.get_default().get_clipboard().set(f"https://music.youtube.com/watch?v={v}")
+                self._show_toast("Link copied")
+            a_copy.connect("activate", _copy_link)
+            group.add_action(a_copy)
+            menu.append_section(None, clip_section)
+
+        popover = Gtk.PopoverMenu.new_from_model(menu)
+        popover.set_parent(widget)
+        popover.set_has_arrow(False)
+        rect = Gdk.Rectangle()
+        rect.x = int(x)
+        rect.y = int(y)
+        rect.width = 1
+        rect.height = 1
+        popover.set_pointing_to(rect)
+        popover.popup()
 
     def _on_row_move(self, old_index, new_index):
         if self.player.move_queue_item(old_index, new_index):
@@ -416,28 +491,19 @@ class QueuePanel(Gtk.Box):
         current_idx = self.player.current_queue_index
         n = self.store.get_n_items()
 
-        self._programmatic_update = True
-        try:
-            player_state = self.player.get_state_string()
-            is_paused_global = player_state in ("paused", "stopped")
+        player_state = self.player.get_state_string()
+        is_paused_global = player_state in ("paused", "stopped")
 
-            for i in range(n):
-                item = self.store.get_item(i)
-                was_playing = item.is_playing
-                was_paused = item.is_paused
-                is_playing = i == current_idx
+        for i in range(n):
+            item = self.store.get_item(i)
+            is_playing = i == current_idx
 
-                if was_playing != is_playing or was_paused != is_paused_global:
-                    item.is_playing = is_playing
-                    item.is_paused = is_paused_global
+            if item.is_playing != is_playing or item.is_paused != is_paused_global:
+                item.is_playing = is_playing
+                item.is_paused = is_paused_global
 
-            if current_idx >= 0 and current_idx < n:
-                self.selection_model.set_selected(current_idx)
-
-            if self.get_mapped():
-                GLib.idle_add(self._scroll_to_current)
-        finally:
-            self._programmatic_update = False
+        if self.get_mapped():
+            GLib.idle_add(self._scroll_to_current)
 
     def _show_toast(self, message):
         root = self.get_root()

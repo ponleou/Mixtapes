@@ -91,10 +91,22 @@ class BasePlaylistPage(Adw.Bin):
         self.description_label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
         self.description_label.set_justify(Gtk.Justification.LEFT)
         self.description_label.set_halign(Gtk.Align.START)
-        self.description_label.set_visible(False)
-        self.description_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self.description_label.set_lines(3)
-        self.details_col.append(self.description_label)
+        self._description_expanded = False
+        self._full_description = ""
+
+        self.read_more_btn = Gtk.Label()
+        self.read_more_btn.set_use_markup(True)
+        self.read_more_btn.set_markup("<a href='toggle'>Read more</a>")
+        self.read_more_btn.add_css_class("caption")
+        self.read_more_btn.set_halign(Gtk.Align.START)
+        self.read_more_btn.set_visible(False)
+        self.read_more_btn.connect("activate-link", self._on_read_more_clicked)
+
+        self.desc_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.desc_box.append(self.description_label)
+        self.desc_box.append(self.read_more_btn)
+        self.desc_box.set_visible(False)
+        self.details_col.append(self.desc_box)
 
         self.meta_label = Gtk.Label(label="")
         self.meta_label.add_css_class("caption")
@@ -260,6 +272,9 @@ class BasePlaylistPage(Adw.Bin):
         widget = list_item.get_child()
         item = list_item.get_item()
         widget.bind(item, self)
+        if hasattr(widget, 'img') and hasattr(widget.img, 'set_compact'):
+            root = self.get_root()
+            widget.img.set_compact(getattr(root, '_is_compact', False) if root else False)
 
     def _on_factory_unbind(self, factory, list_item):
         widget = list_item.get_child()
@@ -274,6 +289,34 @@ class BasePlaylistPage(Adw.Bin):
 
     def filter_content(self, text):
         self.current_filter_text = text.strip()
+        query = self.current_filter_text.lower()
+
+        # Search original_tracks directly and repopulate with matching results
+        if hasattr(self, "original_tracks") and self.original_tracks:
+            # Disable GTK filter during manual rebuilds to avoid double-filtering
+            self.filter_model.set_filter(None)
+
+            if query:
+                matches = []
+                for i, t in enumerate(self.original_tracks):
+                    title = (t.get("title") or "").lower()
+                    artist = (t.get("artist") or "").lower()
+                    if not artist:
+                        artists = t.get("artists", [])
+                        artist = ", ".join(a.get("name", "") for a in artists).lower()
+                    if query in title or query in artist:
+                        matches.append(SongItem(t, i))
+                self.store.splice(0, self.store.get_n_items(), matches)
+            else:
+                # Filter cleared: restore the lazy-loaded state from current_tracks
+                items = [SongItem(t, i) for i, t in enumerate(self.current_tracks)]
+                self.store.splice(0, self.store.get_n_items(), items)
+
+            # Always re-enable the GTK filter so any tracks added later are also filtered
+            self.filter_model.set_filter(self.custom_filter)
+            return
+
+        # Fallback: use the GTK filter for stores without original_tracks
         self.custom_filter.changed(Gtk.FilterChange.DIFFERENT)
 
     def _on_scroll(self, vadjust):
@@ -362,11 +405,20 @@ class BasePlaylistPage(Adw.Bin):
         self.playlist_title_text = title
         self.playlist_name_label.set_label(title)
 
-        if description:
-            self.description_label.set_label(description)
-            self.description_label.set_visible(True)
+        if description and description.strip():
+            self._full_description = description
+            self._description_expanded = False
+            self.read_more_btn.set_markup("<a href='toggle'>Read more</a>")
+            if len(description) > 200:
+                truncated = description[:200].rsplit(" ", 1)[0] + "..."
+                self.description_label.set_label(truncated)
+                self.read_more_btn.set_visible(True)
+            else:
+                self.description_label.set_label(description)
+                self.read_more_btn.set_visible(False)
+            self.desc_box.set_visible(True)
         else:
-            self.description_label.set_visible(False)
+            self.desc_box.set_visible(False)
 
         self.meta_label.set_markup(meta1)
         self.stats_label.set_label(meta2)
@@ -531,7 +583,40 @@ class BasePlaylistPage(Adw.Bin):
         # Same logic as before
         pass
 
+    def _on_read_more_clicked(self, label, uri):
+        GLib.idle_add(self._toggle_description)
+        return True
+
+    def _toggle_description(self):
+        self._description_expanded = not self._description_expanded
+        if self._description_expanded:
+            self.description_label.set_label(self._full_description)
+            text = "Show less"
+        else:
+            truncated = self._full_description[:200].rsplit(" ", 1)[0] + "..."
+            self.description_label.set_label(truncated)
+            text = "Read more"
+        parent = self.read_more_btn.get_parent()
+        parent.remove(self.read_more_btn)
+        self.read_more_btn = Gtk.Label()
+        self.read_more_btn.set_use_markup(True)
+        self.read_more_btn.set_markup(f"<a href='toggle'>{text}</a>")
+        self.read_more_btn.add_css_class("caption")
+        self.read_more_btn.set_halign(Gtk.Align.START)
+        self.read_more_btn.connect("activate-link", self._on_read_more_clicked)
+        parent.append(self.read_more_btn)
+        return False
+
     def set_compact_mode(self, compact):
+        # Propagate compact to all song row images
+        self._compact = compact
+        child = self.songs_view.get_first_child()
+        while child:
+            row_widget = child.get_first_child()
+            if row_widget and hasattr(row_widget, 'img') and hasattr(row_widget.img, 'set_compact'):
+                row_widget.img.set_compact(compact)
+            child = child.get_next_sibling()
+
         if compact:
             self.header_info_box.set_orientation(Gtk.Orientation.VERTICAL)
             self.header_info_box.set_halign(Gtk.Align.CENTER)

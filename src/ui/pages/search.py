@@ -89,6 +89,7 @@ class SearchPage(Adw.Bin):
         self.player.connect("state-changed", self.on_player_state_changed)
 
     def set_compact_mode(self, compact):
+        self._compact = compact
         if compact:
             self.add_css_class("compact")
             self.results_box.set_spacing(16)
@@ -98,8 +99,20 @@ class SearchPage(Adw.Bin):
             self.results_box.set_spacing(24)
             self.explore_box.set_spacing(24)
 
+        # Update song row images
+        self._propagate_compact(self.results_box, compact)
+
         # Load explore data
         self.load_explore_data()
+
+    def _propagate_compact(self, widget, compact):
+        """Recursively find AsyncPicture children and set compact mode."""
+        if hasattr(widget, 'set_compact') and hasattr(widget, 'target_size'):
+            widget.set_compact(compact)
+        child = widget.get_first_child() if hasattr(widget, 'get_first_child') else None
+        while child:
+            self._propagate_compact(child, compact)
+            child = child.get_next_sibling()
 
     def on_key_pressed(self, controller, keyval, keycode, state):
         # If user types and entry is not focused, focus it
@@ -273,7 +286,7 @@ class SearchPage(Adw.Bin):
 
             # Special handling for Artist results to avoid redundant name
             if item.get("resultType") == "artist":
-                if "subscribers" in item:
+                if "subscribers" in item and item.get("subscribers"):
                     count = item.get("subscribers", "")
                     if (
                         count
@@ -284,13 +297,30 @@ class SearchPage(Adw.Bin):
                         subtitle = f"{count} monthly listeners"
                     else:
                         subtitle = count
-            elif "artists" in item:
-                artists = item.get("artists", [])
-                subtitle = ", ".join([a["name"] for a in artists])
+                if not subtitle:
+                    subtitle = "Artist"
+            elif item.get("artists"):
+                artists = item["artists"]
+                if artists:
+                    subtitle = ", ".join([a.get("name", "") for a in artists if isinstance(a, dict)])
+                    if not subtitle:
+                        # Artists might be plain strings
+                        subtitle = ", ".join([str(a) for a in artists if a])
+                # Fallback to author field
+                if not subtitle and "author" in item:
+                    author = item.get("author")
+                    if isinstance(author, list):
+                        subtitle = ", ".join([a.get("name", str(a)) for a in author])
+                    elif isinstance(author, dict):
+                        subtitle = author.get("name", str(author))
+                    elif author:
+                        subtitle = str(author)
 
                 # Check for Album type
-                if "type" in item:
+                if "type" in item and subtitle:
                     subtitle += f" • {item['type']}"
+                elif "type" in item:
+                    subtitle = item["type"]
             elif "subscribers" in item:
                 subtitle = item.get("subscribers", "")
             elif "itemCount" in item and item["itemCount"]:
@@ -306,12 +336,14 @@ class SearchPage(Adw.Bin):
 
             img = AsyncPicture(
                 url=thumb_url,
-                target_size=44,
+                target_size=56,
                 crop_to_square=True,
                 player=self.player,
             )
             img.video_id = item.get("videoId")
             img.add_css_class("song-img")
+            root = self.get_root()
+            img.set_compact(getattr(root, '_is_compact', False) if root else False)
             if not thumb_url:
                 img.set_from_icon_name("media-optical-symbolic")
 
@@ -332,6 +364,40 @@ class SearchPage(Adw.Bin):
             subtitle_label.set_lines(1)
             subtitle_label.add_css_class("dim-label")
             subtitle_label.add_css_class("caption")
+            subtitle_label.set_visible(bool(subtitle))
+
+            # Fetch missing artist info in background for albums with empty artists
+            if not subtitle:
+                browse_id = item.get("browseId") or ""
+                audio_pid = item.get("audioPlaylistId") or ""
+                album_id = browse_id if browse_id.startswith("MPRE") else None
+                if not album_id and audio_pid.startswith("OLAK"):
+                    # Convert OLAK to browse ID via API
+                    album_id = audio_pid
+                if album_id:
+                    item_type = item.get("type", "")
+                    def _fetch_artist_info(aid, itype, lbl, client):
+                        try:
+                            if aid.startswith("OLAK"):
+                                bid = client.get_album_browse_id(aid)
+                                if bid:
+                                    aid = bid
+                            data = client.get_album(aid)
+                            if data:
+                                artists = data.get("artists", [])
+                                text = ", ".join(a.get("name", "") for a in artists if isinstance(a, dict))
+                                if itype:
+                                    text = f"{text} • {itype}" if text else itype
+                                if text:
+                                    GLib.idle_add(lbl.set_label, text)
+                                    GLib.idle_add(lbl.set_visible, True)
+                        except Exception:
+                            pass
+                    threading.Thread(
+                        target=_fetch_artist_info,
+                        args=(album_id, item_type, subtitle_label, self.client),
+                        daemon=True,
+                    ).start()
 
             title_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             title_box.append(title_label)
@@ -688,6 +754,9 @@ class SearchPage(Adw.Bin):
                     clipboard = Gdk.Display.get_default().get_clipboard()
                     clipboard.set(url)
                     print(f"Copied to clipboard: {url}")
+                    root = self.get_root()
+                    if root and hasattr(root, "add_toast"):
+                        root.add_toast("Link copied")
                 except Exception as e:
                     print(f"Clipboard error: {e}")
 
@@ -743,13 +812,38 @@ class SearchPage(Adw.Bin):
         action_add.connect("activate", add_to_playlist_action)
         group.add_action(action_add)
 
+        # Start Radio
+        def start_radio_action(action, param):
+            vid = data.get("videoId")
+            browse_id = data.get("browseId")
+            if vid:
+                self.player.start_radio(video_id=vid)
+            elif browse_id:
+                # For artists/playlists, use the browse ID as playlist source
+                self.player.start_radio(playlist_id=browse_id)
+
+        action_radio = Gio.SimpleAction.new("start_radio", None)
+        action_radio.connect("activate", start_radio_action)
+        group.add_action(action_radio)
+
         # Build Menu Model
         menu_model = Gio.Menu()
 
-        if url:
-            menu_model.append("Copy Link", "row.copy_link")
+        # Navigation
+        nav_section = Gio.Menu()
+        has_artist = False
+        if "artists" in data and data["artists"] and data["artists"][0].get("id"):
+            has_artist = True
+        elif data.get("resultType") == "artist" and data.get("browseId"):
+            has_artist = True
+        if has_artist:
+            nav_section.append("Go to Artist", "row.goto_artist")
+        if nav_section.get_n_items() > 0:
+            menu_model.append_section(None, nav_section)
 
-        # Add to Playlist Submenu
+        # Actions
+        action_section = Gio.Menu()
+        action_section.append("Start Radio", "row.start_radio")
         if "videoId" in data:
             playlists = self.client.get_editable_playlists()
             if playlists:
@@ -759,19 +853,15 @@ class SearchPage(Adw.Bin):
                     p_id = p.get("playlistId")
                     if p_id:
                         playlist_menu.append(p_title, f"row.add_to_playlist('{p_id}')")
-                menu_model.append_submenu("Add to Playlist", playlist_menu)
+                action_section.append_submenu("Add to Playlist", playlist_menu)
+        menu_model.append_section(None, action_section)
 
-        has_artist = False
-        if "artists" in data and data["artists"] and data["artists"][0].get("id"):
-            has_artist = True
-        elif data.get("resultType") == "artist" and data.get("browseId"):
-            # If it's an artist row, "Go to Artist" is just activating the row.
-            # Maybe "Open" instead? Or just omit.
-            # Let's keep it context menu usually has "Go to Artist" even on Artist.
-            has_artist = True
-
-        if has_artist:
-            menu_model.append("Go to Artist", "row.goto_artist")
+        # Clipboard
+        clip_section = Gio.Menu()
+        if url:
+            clip_section.append("Copy Link", "row.copy_link")
+        if clip_section.get_n_items() > 0:
+            menu_model.append_section(None, clip_section)
 
         if menu_model.get_n_items() > 0:
             popover = Gtk.PopoverMenu.new_from_model(menu_model)
