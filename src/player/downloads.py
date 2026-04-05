@@ -19,9 +19,9 @@ from gi.repository import GLib, GObject
 
 # Format config
 FORMATS = {
-    "opus": {"ext": "opus", "ydl_format": "bestaudio[ext=webm]/bestaudio/best", "ffmpeg_codec": "libopus"},
+    "opus": {"ext": "opus", "ydl_format": "bestaudio/best", "ffmpeg_codec": "libopus"},
     "mp3": {"ext": "mp3", "ydl_format": "bestaudio/best", "ffmpeg_codec": "libmp3lame"},
-    "m4a": {"ext": "m4a", "ydl_format": "bestaudio[ext=m4a]/bestaudio/best", "ffmpeg_codec": "aac"},
+    "m4a": {"ext": "m4a", "ydl_format": "bestaudio/best", "ffmpeg_codec": "aac"},
     "flac": {"ext": "flac", "ydl_format": "bestaudio/best", "ffmpeg_codec": "flac"},
     "ogg": {"ext": "ogg", "ydl_format": "bestaudio/best", "ffmpeg_codec": "libvorbis"},
 }
@@ -580,6 +580,7 @@ class DownloadManager(GObject.Object):
             "outtmpl": tmp_file.rsplit(".", 1)[0] + ".%(ext)s",
             "quiet": True,
             "no_warnings": True,
+            "js_runtimes": {"node": {}},
             "progress_hooks": [_ydl_progress_hook],
             "postprocessors": [{
                 "key": "FFmpegExtractAudio",
