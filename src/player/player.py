@@ -1,4 +1,5 @@
 import gi
+import sys
 import threading
 import random
 import os
@@ -8,12 +9,19 @@ gi.require_version("GstAudio", "1.0")
 from gi.repository import Gst, GstAudio, GObject, GLib, GdkPixbuf
 import glob
 from yt_dlp import YoutubeDL
-from mprisify.server import Server
 from ui.utils import get_high_res_url, get_ytimg_fallbacks
-from player.mpris import MuseMprisAdapter, MuseEventAdapter
 from player.cache import StreamCache
 from player.downloads import DownloadManager
 from api.client import MusicClient
+
+HAS_MPRIS = False
+if sys.platform != "win32":
+    try:
+        from mprisify.server import Server
+        from player.mpris import MuseMprisAdapter, MuseEventAdapter
+        HAS_MPRIS = True
+    except ImportError:
+        pass
 
 
 class Player(GObject.Object):
@@ -112,20 +120,21 @@ class Player(GObject.Object):
         # Timer for progress
         GObject.timeout_add(100, self.update_position)
 
-        # MPRIS Setup
-        self.mpris_adapter = MuseMprisAdapter(self)
-        self.mpris_server = Server("Mixtapes", adapter=self.mpris_adapter)
-        self.mpris_events = MuseEventAdapter(
-            self.mpris_server.root, self.mpris_server.player
-        )
-        self.mpris_server.set_event_adapter(self.mpris_events)
-        self.mpris_server.loop(background=True)
+        # MPRIS Setup (Linux-only, requires D-Bus)
+        if HAS_MPRIS:
+            self.mpris_adapter = MuseMprisAdapter(self)
+            self.mpris_server = Server("Mixtapes", adapter=self.mpris_adapter)
+            self.mpris_events = MuseEventAdapter(
+                self.mpris_server.root, self.mpris_server.player
+            )
+            self.mpris_server.set_event_adapter(self.mpris_events)
+            self.mpris_server.loop(background=True)
 
-        # Connect signals for MPRIS updates
-        self.connect("state-changed", self._on_mpris_state_changed)
-        self.connect("metadata-changed", self._on_mpris_metadata_changed)
-        self.connect("progression", self._on_mpris_progression)
-        self.connect("volume-changed", self._on_mpris_volume_changed)
+            # Connect signals for MPRIS updates
+            self.connect("state-changed", self._on_mpris_state_changed)
+            self.connect("metadata-changed", self._on_mpris_metadata_changed)
+            self.connect("progression", self._on_mpris_progression)
+            self.connect("volume-changed", self._on_mpris_volume_changed)
 
     def _on_mpris_state_changed(self, obj, state):
         print(f"DEBUG-MPRIS-STATE-START: state={state}")

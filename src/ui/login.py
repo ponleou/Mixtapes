@@ -1,3 +1,4 @@
+import sys
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -5,7 +6,15 @@ gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw, GObject
 
 from api.client import MusicClient
-from ui.login_webview import WebkitLoginView
+
+HAS_WEBKIT = False
+if sys.platform != "win32":
+    try:
+        gi.require_version("WebKit", "6.0")
+        from ui.login_webview import WebkitLoginView
+        HAS_WEBKIT = True
+    except (ImportError, ValueError):
+        pass
 
 
 class LoginDialog(Adw.Window):
@@ -33,10 +42,12 @@ class LoginDialog(Adw.Window):
         # Access content via view stack
         self.stack = Adw.ViewStack()
 
-        # 0. Direct Webkit View
-        self.webkit_view = WebkitLoginView()
-        self.webkit_view.connect("login-finished", self.on_webkit_login_finished)
-        self.stack.add_titled(self.webkit_view, "direct", "Direct Login")
+        # 0. Direct Webkit View (Linux-only, requires WebKitGTK)
+        self.webkit_view = None
+        if HAS_WEBKIT:
+            self.webkit_view = WebkitLoginView()
+            self.webkit_view.connect("login-finished", self.on_webkit_login_finished)
+            self.stack.add_titled(self.webkit_view, "direct", "Direct Login")
 
         # 1. Browser View
         browser_view = self._build_browser_view()
@@ -152,7 +163,8 @@ class LoginDialog(Adw.Window):
                 print("Login Successful")
                 # Clear cookies for security and ensure window closes
                 try:
-                    self.webkit_view.clear_webkit_cookies()
+                    if self.webkit_view:
+                        self.webkit_view.clear_webkit_cookies()
                 finally:
                     self.close()
             else:

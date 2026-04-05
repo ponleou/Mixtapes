@@ -1,0 +1,8 @@
+PyGObject
+ytmusicapi
+yt-dlp
+yt-dlp-ejs
+requests
+urllib3
+mutagen
+StrEnum==0.4.15
