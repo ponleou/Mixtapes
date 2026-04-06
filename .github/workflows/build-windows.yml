@@ -57,6 +57,15 @@ jobs:
           pip install --break-system-packages winrt-sdk
           pip install --break-system-packages winrt-Windows.Media winrt-Windows.Media.Playback winrt-Windows.Storage.Streams winrt-Windows.Foundation
 
+      - name: Download Adwaita Sans font
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path windows/fonts
+          Invoke-WebRequest -Uri "https://gitlab.gnome.org/api/v4/projects/GNOME%2Fadwaita-fonts/repository/files/sans%2FAdwaitaSans-Regular.ttf/raw?ref=main" -OutFile "windows/fonts/AdwaitaSans-Regular.ttf"
+          $size = (Get-Item "windows/fonts/AdwaitaSans-Regular.ttf").Length
+          Write-Host "Font size: $size bytes"
+          if ($size -lt 10000) { throw "Font file too small" }
+
       - name: Generate icon and compile launcher
         run: |
           # Convert SVG app icon to ICO (multi-size)
@@ -122,6 +131,10 @@ jobs:
           cp windows/mixtapes.ico dist/mixtapes/windows/
           # Login helper was built by native Python outside MSYS2
           cp dist/MixtapesLogin.exe dist/mixtapes/ 2>/dev/null || true
+
+          # Bundle Adwaita Sans font (auto-installed per-user on first run)
+          mkdir -p dist/mixtapes/fonts
+          cp windows/fonts/*.ttf dist/mixtapes/fonts/
 
 
 

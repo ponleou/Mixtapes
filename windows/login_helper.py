@@ -21,10 +21,15 @@ OUTPUT_PATH = None
 
 
 def get_default_output():
-    appdata = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
-    d = os.path.join(appdata, "Mixtapes")
+    # Match the app's auth path: GLib.get_user_data_dir() + "/muse/headers_auth.json"
+    # On Windows: %LOCALAPPDATA%/muse/headers_auth.json
+    # On Linux: ~/.local/share/muse/headers_auth.json
+    appdata = os.environ.get("LOCALAPPDATA", "")
+    if not appdata:
+        appdata = os.path.join(os.path.expanduser("~"), ".local", "share")
+    d = os.path.join(appdata, "muse")
     os.makedirs(d, exist_ok=True)
-    return os.path.join(d, "login_headers.json")
+    return os.path.join(d, "headers_auth.json")
 
 
 def check_cookies(window):
@@ -53,12 +58,12 @@ def check_cookies(window):
                 # pywebview returns http.cookies.SimpleCookie objects
                 # each SimpleCookie is a dict of {name: Morsel}
                 for name, morsel in cookie.items():
-                    value = morsel.coded_value
+                    value = morsel.value  # .value gives unquoted, .coded_value keeps quotes
                     if name and value:
                         cookie_strs.append(f"{name}={value}")
                         if name in ("SAPISID", "__Secure-3PAPISID"):
                             has_sapisid = True
-                            print(f"  Found auth cookie: {name}")
+                            print(f"  Found auth cookie: {name}={value}")
 
             if has_sapisid:
                 _save_and_close(window, "; ".join(cookie_strs))
@@ -97,7 +102,7 @@ def _extract_sapisid(cookie_string):
         part = part.strip()
         if part.startswith("SAPISID="):
             val = part[len("SAPISID="):]
-            return val.strip('"')
+            return val.strip().strip('"').strip("'")
     return None
 
 
