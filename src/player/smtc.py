@@ -4,17 +4,12 @@ Uses pywinrt to expose playback state to Windows media overlay (Win+G, keyboard 
 """
 
 import sys
-import asyncio
-import threading
 
 if sys.platform != "win32":
     raise ImportError("smtc is Windows-only")
 
 from winrt.windows.media import (
-    SystemMediaTransportControls,
     SystemMediaTransportControlsButton,
-    SystemMediaTransportControlsButtonPressedEventArgs,
-    SystemMediaTransportControlsDisplayUpdater,
     MediaPlaybackType,
     MediaPlaybackStatus,
     SystemMediaTransportControlsTimelineProperties,
@@ -105,16 +100,14 @@ class SMTCAdapter:
             return
 
         try:
-            import winrt.windows.foundation as wf
-
             props = SystemMediaTransportControlsTimelineProperties()
-            # TimeSpan is in 100-nanosecond units
+            # In pywinrt, TimeSpan properties are plain ints (100-nanosecond ticks)
             ticks_per_sec = 10_000_000
-            props.start_time = wf.TimeSpan(0)
-            props.min_seek_time = wf.TimeSpan(0)
-            props.position = wf.TimeSpan(int(position_secs * ticks_per_sec))
-            props.max_seek_time = wf.TimeSpan(int(duration_secs * ticks_per_sec))
-            props.end_time = wf.TimeSpan(int(duration_secs * ticks_per_sec))
+            props.start_time = 0
+            props.min_seek_time = 0
+            props.position = int(position_secs * ticks_per_sec)
+            props.max_seek_time = int(duration_secs * ticks_per_sec)
+            props.end_time = int(duration_secs * ticks_per_sec)
 
             self._smtc.update_timeline_properties(props)
         except Exception as e:

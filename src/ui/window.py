@@ -745,17 +745,30 @@ class MainWindow(Adw.ApplicationWindow):
         # Intercept window close to hide instead of quit when playing
         self.connect("close-request", self._on_close_request)
 
+        # On Windows, manage tray icon when window visibility changes
+        if HAS_TRAY:
+            self.connect("notify::visible", self._on_visibility_changed)
+
     def _on_close_request(self, window):
         """Hide window instead of quitting if there are songs in the queue."""
         if self.player.queue and self.player.current_queue_index >= 0:
             self.set_visible(False)
-            if HAS_TRAY and not hasattr(self, "_tray_icon"):
-                self._tray_icon = TrayIcon(self, self.player)
-                self._tray_icon.show()
             return True  # Prevent default close
         if HAS_TRAY and hasattr(self, "_tray_icon"):
             self._tray_icon.hide()
         return False  # Allow normal close
+
+    def _on_visibility_changed(self, window, pspec):
+        if self.get_visible():
+            # Window shown — hide tray icon
+            if hasattr(self, "_tray_icon"):
+                self._tray_icon.hide()
+                del self._tray_icon
+        else:
+            # Window hidden — show tray icon
+            if not hasattr(self, "_tray_icon"):
+                self._tray_icon = TrayIcon(self, self.player)
+                self._tray_icon.show()
 
     def _on_force_quit(self, action, param):
         """Force quit the application."""

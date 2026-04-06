@@ -52,10 +52,8 @@ jobs:
       - name: Download Adwaita Sans font
         run: |
           mkdir -p windows/fonts
-          FONT_URL="https://github.com/nicoverbruggen/adwaita-fonts/releases/download/v50.1/AdwaitaSans-Regular.otf"
-          FONT_BOLD_URL="https://github.com/nicoverbruggen/adwaita-fonts/releases/download/v50.1/AdwaitaSans-Bold.otf"
-          curl -sL "$FONT_URL" -o windows/fonts/AdwaitaSans-Regular.otf
-          curl -sL "$FONT_BOLD_URL" -o windows/fonts/AdwaitaSans-Bold.otf
+          curl -sL "https://gitlab.gnome.org/GNOME/adwaita-fonts/-/raw/main/sans/AdwaitaSans-Regular.ttf?ref_type=heads&inline=false" -o windows/fonts/AdwaitaSans-Regular.ttf
+          curl -sL "https://gitlab.gnome.org/GNOME/adwaita-fonts/-/raw/main/sans/AdwaitaSans-Bold.ttf?ref_type=heads&inline=false" -o windows/fonts/AdwaitaSans-Bold.ttf
           ls -la windows/fonts/
 
       - name: Generate icon and compile launcher
@@ -108,24 +106,11 @@ jobs:
           MSYS_ROOT="/$MSYSTEM"
           PYTHON_VER=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 
-          # Compile .py to .pyc and copy
-          echo "Compiling Python source to bytecode..."
-          python -m compileall -b -q src/
-          mkdir -p dist/mixtapes/src
-          # Copy .pyc files preserving directory structure, then copy non-.py files
-          cd src
-          find . -name '*.pyc' | while read f; do
-            dir=$(dirname "$f")
-            mkdir -p "../dist/mixtapes/src/$dir"
-            cp "$f" "../dist/mixtapes/src/$f"
-          done
-          # Copy non-Python files (CSS, gresource, XML, etc.)
-          find . -type f ! -name '*.py' ! -name '*.pyc' ! -path './__pycache__/*' | while read f; do
-            dir=$(dirname "$f")
-            mkdir -p "../dist/mixtapes/src/$dir"
-            cp "$f" "../dist/mixtapes/src/$f"
-          done
-          cd ..
+          # Copy app source and compile to .pyc (keep .py so launcher references work)
+          cp -r src dist/mixtapes/
+          python -m compileall -b -q dist/mixtapes/src/
+          # Remove __pycache__ dirs (compileall -b puts .pyc next to .py)
+          find dist/mixtapes/src -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
           # Copy assets
           cp -r assets dist/mixtapes/
@@ -138,7 +123,7 @@ jobs:
 
           # Copy fonts
           mkdir -p dist/mixtapes/share/fonts
-          cp windows/fonts/*.otf dist/mixtapes/share/fonts/
+          cp windows/fonts/*.ttf dist/mixtapes/share/fonts/
 
           # Copy runtime binaries
           echo "Copying runtime binaries..."
@@ -171,7 +156,7 @@ jobs:
 
           # Install fonts into runtime share for fontconfig discovery
           mkdir -p dist/mixtapes/runtime/share/fonts/adwaita-sans
-          cp windows/fonts/*.otf dist/mixtapes/runtime/share/fonts/adwaita-sans/
+          cp windows/fonts/*.ttf dist/mixtapes/runtime/share/fonts/adwaita-sans/
 
           # Keep the .bat as a debug launcher
           printf '@echo off\r\nset MYDIR=%%~dp0\r\nset PATH=%%MYDIR%%runtime\\bin;%%PATH%%\r\nset PYTHONHOME=%%MYDIR%%runtime\r\nset GI_TYPELIB_PATH=%%MYDIR%%runtime\\lib\\girepository-1.0\r\nset GST_PLUGIN_PATH=%%MYDIR%%runtime\\lib\\gstreamer-1.0\r\nset GIO_MODULE_DIR=%%MYDIR%%runtime\\lib\\gio\\modules\r\nset GSETTINGS_SCHEMA_DIR=%%MYDIR%%runtime\\share\\glib-2.0\\schemas\r\nset SSL_CERT_FILE=%%MYDIR%%runtime\\ssl\\certs\\ca-bundle.crt\r\nset XDG_DATA_DIRS=%%MYDIR%%runtime\\share\r\nset PYTHONPATH=%%MYDIR%%src\r\n"%%MYDIR%%runtime\\bin\\python3.exe" "%%MYDIR%%src\\main.py" %%*\r\n' > dist/mixtapes/mixtapes-debug.bat
