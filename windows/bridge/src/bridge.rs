@@ -96,15 +96,14 @@ fn setup_smtc() -> windows::core::Result<SystemMediaTransportControls> {
         };
         windows_sys::Win32::UI::WindowsAndMessaging::RegisterClassW(&wc);
 
-        // Create a hidden message-only window
+        // Create a hidden top-level window (SMTC needs a real window, not message-only)
         let hwnd = windows_sys::Win32::UI::WindowsAndMessaging::CreateWindowExW(
             0,
             class_name.as_ptr(),
             windows::core::w!("Mixtapes").as_ptr(),
-            0, // no style (hidden)
+            0, // WS_OVERLAPPED but never shown
             0, 0, 0, 0,
-            // HWND_MESSAGE makes it a message-only window (invisible)
-            -3isize as *mut _, // HWND_MESSAGE
+            std::ptr::null_mut(), // no parent — top-level
             std::ptr::null_mut(),
             hinstance,
             std::ptr::null(),
@@ -114,6 +113,9 @@ fn setup_smtc() -> windows::core::Result<SystemMediaTransportControls> {
             return Err(windows::core::Error::from_win32());
         }
 
+        // Convert windows-sys HWND (isize) to windows crate HWND
+        let hwnd_typed = windows::Win32::Foundation::HWND(hwnd);
+
         // Get SMTC via the interop interface bound to our HWND
         let interop: ISystemMediaTransportControlsInterop =
             windows::core::factory::<
@@ -121,8 +123,7 @@ fn setup_smtc() -> windows::core::Result<SystemMediaTransportControls> {
                 ISystemMediaTransportControlsInterop,
             >()?;
 
-        let smtc: SystemMediaTransportControls =
-            interop.GetForWindow(windows::Win32::Foundation::HWND(hwnd as *mut _))?;
+        let smtc: SystemMediaTransportControls = interop.GetForWindow(hwnd_typed)?;
 
         // Enable controls
         smtc.SetIsEnabled(true)?;
