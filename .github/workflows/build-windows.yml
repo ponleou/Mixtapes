@@ -169,6 +169,28 @@ jobs:
           # Debug launcher (bat)
           printf '@echo off\r\nset MYDIR=%%~dp0\r\nset PATH=%%MYDIR%%runtime\\bin;%%PATH%%\r\nset PYTHONHOME=%%MYDIR%%runtime\r\nset GI_TYPELIB_PATH=%%MYDIR%%runtime\\lib\\girepository-1.0\r\nset GST_PLUGIN_PATH=%%MYDIR%%runtime\\lib\\gstreamer-1.0\r\nset GIO_MODULE_DIR=%%MYDIR%%runtime\\lib\\gio\\modules\r\nset GSETTINGS_SCHEMA_DIR=%%MYDIR%%runtime\\share\\glib-2.0\\schemas\r\nset SSL_CERT_FILE=%%MYDIR%%runtime\\ssl\\certs\\ca-bundle.crt\r\nset XDG_DATA_DIRS=%%MYDIR%%runtime\\share\r\nset PYTHONPATH=%%MYDIR%%src\r\n"%%MYDIR%%runtime\\bin\\python3.exe" "%%MYDIR%%src\\main.py" %%*\r\n' > dist/mixtapes/mixtapes-debug.bat
 
+      - name: Brand Python executables with app icon and metadata
+        shell: pwsh
+        run: |
+          # Download rcedit
+          Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile "rcedit.exe"
+
+          # Brand pythonw.exe (the actual process that owns the window/taskbar entry)
+          $pythonw = "dist/mixtapes/runtime/bin/pythonw.exe"
+          $python3 = "dist/mixtapes/runtime/bin/python3.exe"
+          $ico = "windows/mixtapes.ico"
+
+          foreach ($exe in @($pythonw, $python3)) {
+            if (Test-Path $exe) {
+              Write-Host "Branding $exe..."
+              ./rcedit.exe $exe --set-icon $ico
+              ./rcedit.exe $exe --set-version-string "ProductName" "Mixtapes"
+              ./rcedit.exe $exe --set-version-string "FileDescription" "Mixtapes"
+              ./rcedit.exe $exe --set-version-string "CompanyName" "pocoguy"
+              ./rcedit.exe $exe --set-version-string "OriginalFilename" "Mixtapes.exe"
+            }
+          }
+
           echo "Bundle size:"
           du -sh dist/mixtapes
 

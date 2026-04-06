@@ -26,9 +26,6 @@ class MainWindow(Adw.ApplicationWindow):
         self.set_title("Mixtapes")
         self._is_compact = False
 
-        # On Windows, set the window icon via Win32 API after the window is realized
-        if sys.platform == "win32":
-            self.connect("realize", self._set_win32_icon)
 
         # Add custom icons path relative to current file or project root
 
@@ -773,55 +770,6 @@ class MainWindow(Adw.ApplicationWindow):
             if not hasattr(self, "_tray_icon"):
                 self._tray_icon = TrayIcon(self, self.player)
                 self._tray_icon.show()
-
-    def _set_win32_icon(self, widget):
-        """Set the window icon via Win32 API after the GDK surface is realized."""
-        try:
-            import ctypes
-
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            ico_path = os.path.join(project_root, "windows", "mixtapes.ico")
-            if not os.path.exists(ico_path):
-                return
-
-            user32 = ctypes.windll.user32
-
-            # Get the native Win32 HWND from the GDK surface
-            surface = self.get_surface()
-            if not surface:
-                return
-
-            # GDK4 on Windows: surface has a handle property
-            hwnd = None
-            if hasattr(surface, "get_handle"):
-                hwnd = surface.get_handle()
-            elif hasattr(surface, "props") and hasattr(surface.props, "handle"):
-                hwnd = surface.props.handle
-
-            if not hwnd:
-                return
-
-            # Load icon from file
-            IMAGE_ICON = 1
-            LR_LOADFROMFILE = 0x0010
-
-            hicon_small = user32.LoadImageW(
-                None, ico_path, IMAGE_ICON, 16, 16, LR_LOADFROMFILE
-            )
-            hicon_big = user32.LoadImageW(
-                None, ico_path, IMAGE_ICON, 48, 48, LR_LOADFROMFILE
-            )
-
-            if hicon_small:
-                WM_SETICON = 0x0080
-                ICON_SMALL = 0
-                ICON_BIG = 1
-                user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon_small)
-                if hicon_big:
-                    user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon_big)
-                print("Window icon set via Win32 API")
-        except Exception as e:
-            print(f"Could not set Win32 window icon: {e}")
 
     def _on_force_quit(self, action, param):
         """Force quit the application."""
