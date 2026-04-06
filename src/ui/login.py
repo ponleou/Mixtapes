@@ -1,3 +1,4 @@
+import sys
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -5,7 +6,17 @@ gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw, GObject
 
 from api.client import MusicClient
-from ui.login_webview import WebkitLoginView
+
+IS_WINDOWS = sys.platform == "win32"
+
+HAS_WEBKIT = False
+if not IS_WINDOWS:
+    try:
+        gi.require_version("WebKit", "6.0")
+        from ui.login_webview import WebkitLoginView
+        HAS_WEBKIT = True
+    except (ImportError, ValueError):
+        pass
 
 
 class LoginDialog(Adw.Window):
@@ -33,10 +44,15 @@ class LoginDialog(Adw.Window):
         # Access content via view stack
         self.stack = Adw.ViewStack()
 
-        # 0. Direct Webkit View
-        self.webkit_view = WebkitLoginView()
-        self.webkit_view.connect("login-finished", self.on_webkit_login_finished)
-        self.stack.add_titled(self.webkit_view, "direct", "Direct Login")
+        # 0. Direct Login (WebKitGTK on Linux, browser-assisted on Windows)
+        self.webkit_view = None
+        if HAS_WEBKIT:
+            self.webkit_view = WebkitLoginView()
+            self.webkit_view.connect("login-finished", self.on_webkit_login_finished)
+            self.stack.add_titled(self.webkit_view, "direct", "Direct Login")
+        elif IS_WINDOWS:
+            win_login_page = self._build_windows_login_page()
+            self.stack.add_titled(win_login_page, "direct", "Quick Login")
 
         # 1. Browser View
         browser_view = self._build_browser_view()
@@ -138,6 +154,71 @@ class LoginDialog(Adw.Window):
 
         return page
 
+    def _build_windows_login_page(self):
+        page = Adw.StatusPage()
+        page.set_title("Quick Login")
+        page.set_description("Sign in via a login window powered by Edge WebView2.")
+        page.set_icon_name("web-browser-symbolic")
+
+        clamp = Adw.Clamp()
+        clamp.set_maximum_size(500)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+
+        lbl = Gtk.Label()
+        lbl.set_wrap(True)
+        lbl.set_markup(
+            "Click below to open a login window.\n"
+            "Sign in with your Google account and wait for it to close automatically."
+        )
+        box.append(lbl)
+
+        self.win_login_btn = Gtk.Button(label="Open Login Window")
+        self.win_login_btn.set_halign(Gtk.Align.CENTER)
+        self.win_login_btn.add_css_class("pill")
+        self.win_login_btn.add_css_class("suggested-action")
+        self.win_login_btn.connect("clicked", self._on_open_login_helper)
+        box.append(self.win_login_btn)
+
+        self.win_login_status = Gtk.Label(label="")
+        box.append(self.win_login_status)
+
+        clamp.set_child(box)
+        page.set_child(clamp)
+        return page
+
+    def _on_open_login_helper(self, btn):
+        from gi.repository import GLib
+        from ui.login_webview_win import launch_login
+
+        self.win_login_btn.set_sensitive(False)
+        self.win_login_status.set_markup(
+            "<span color='blue'>Login window opened. Sign in and wait...</span>"
+        )
+
+        def on_complete(headers_json, error):
+            GLib.idle_add(self._on_login_helper_result, headers_json, error)
+
+        launch_login(on_complete)
+
+    def _on_login_helper_result(self, headers_json, error):
+        self.win_login_btn.set_sensitive(True)
+        if error:
+            self.win_login_status.set_markup(
+                f"<span color='red'>{error}</span>"
+            )
+            return
+        client = MusicClient()
+        if client.login(headers_json):
+            self.win_login_status.set_markup(
+                "<span color='green'>Login Successful!</span>"
+            )
+            self.close()
+        else:
+            self.win_login_status.set_markup(
+                "<span color='red'>Login failed. Try again or use another method.</span>"
+            )
+
     def on_webkit_login_finished(self, view, success, headers_json):
         if success:
             self.lbl_status.set_markup(
@@ -152,7 +233,8 @@ class LoginDialog(Adw.Window):
                 print("Login Successful")
                 # Clear cookies for security and ensure window closes
                 try:
-                    self.webkit_view.clear_webkit_cookies()
+                    if self.webkit_view:
+                        self.webkit_view.clear_webkit_cookies()
                 finally:
                     self.close()
             else:

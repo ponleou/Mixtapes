@@ -1,4 +1,5 @@
 import os
+import sys
 import threading
 import gi
 
@@ -8,6 +9,14 @@ gi.require_version("Adw", "1")
 from gi.repository import Gtk, Gdk, Adw, GObject, Gio, GLib, Pango
 from player.player import Player
 
+HAS_TRAY = False
+if sys.platform == "win32":
+    try:
+        from ui.tray_win import TrayIcon
+        HAS_TRAY = True
+    except ImportError:
+        pass
+
 
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, *args, **kwargs):
@@ -16,6 +25,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.set_default_size(1000, 700)
         self.set_title("Mixtapes")
         self._is_compact = False
+
 
         # Add custom icons path relative to current file or project root
 
@@ -736,12 +746,30 @@ class MainWindow(Adw.ApplicationWindow):
         # Intercept window close to hide instead of quit when playing
         self.connect("close-request", self._on_close_request)
 
+        # On Windows, manage tray icon when window visibility changes
+        if HAS_TRAY:
+            self.connect("notify::visible", self._on_visibility_changed)
+
     def _on_close_request(self, window):
         """Hide window instead of quitting if there are songs in the queue."""
         if self.player.queue and self.player.current_queue_index >= 0:
             self.set_visible(False)
             return True  # Prevent default close
+        if HAS_TRAY and hasattr(self, "_tray_icon"):
+            self._tray_icon.hide()
         return False  # Allow normal close
+
+    def _on_visibility_changed(self, window, pspec):
+        if self.get_visible():
+            # Window shown — hide tray icon
+            if hasattr(self, "_tray_icon"):
+                self._tray_icon.hide()
+                del self._tray_icon
+        else:
+            # Window hidden — show tray icon
+            if not hasattr(self, "_tray_icon"):
+                self._tray_icon = TrayIcon(self, self.player)
+                self._tray_icon.show()
 
     def _on_force_quit(self, action, param):
         """Force quit the application."""

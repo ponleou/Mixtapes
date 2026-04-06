@@ -1,0 +1,243 @@
+name: Build Windows (Experimental)
+
+on:
+  push:
+    branches: [microslop-experiment]
+  pull_request:
+    branches: [microslop-experiment]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate app icon (early, needed by other steps)
+        shell: pwsh
+        run: |
+          $svg = "assets/icons/hicolor/scalable/actions/compass2-symbolic.svg"
+          if (Test-Path "build-dir/files/share/icons/hicolor/scalable/apps/com.pocoguy.Muse.svg") {
+            $svg = "build-dir/files/share/icons/hicolor/scalable/apps/com.pocoguy.Muse.svg"
+          }
+          magick $svg -background none -resize 256x256 windows/mixtapes_256.png
+          magick windows/mixtapes_256.png `
+            "(" -clone 0 -resize 16x16 ")" `
+            "(" -clone 0 -resize 32x32 ")" `
+            "(" -clone 0 -resize 48x48 ")" `
+            "(" -clone 0 -resize 64x64 ")" `
+            "(" -clone 0 -resize 128x128 ")" `
+            "(" -clone 0 -resize 256x256 ")" `
+            -delete 0 windows/mixtapes.ico
+          Write-Host "Icon generated:"
+          Get-ChildItem windows/mixtapes.ico
+
+      - name: Build login helper (native Windows Python)
+        shell: pwsh
+        run: |
+          pip install pywebview pyinstaller
+          pyinstaller --onefile --noconsole --name MixtapesLogin --icon windows/mixtapes.ico windows/login_helper.py
+          Write-Host "Login helper built:"
+          Get-ChildItem dist/MixtapesLogin.exe
+
+      - name: Download Adwaita Sans font
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path windows/fonts
+          Invoke-WebRequest -Uri "https://gitlab.gnome.org/api/v4/projects/GNOME%2Fadwaita-fonts/repository/files/sans%2FAdwaitaSans-Regular.ttf/raw?ref=main" -OutFile "windows/fonts/AdwaitaSans-Regular.ttf"
+          $size = (Get-Item "windows/fonts/AdwaitaSans-Regular.ttf").Length
+          Write-Host "Font size: $size bytes"
+          if ($size -lt 10000) { throw "Font file too small" }
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-libadwaita
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-python-pip
+            mingw-w64-ucrt-x86_64-python-gobject
+            mingw-w64-ucrt-x86_64-gstreamer
+            mingw-w64-ucrt-x86_64-gst-plugins-base
+            mingw-w64-ucrt-x86_64-gst-plugins-good
+            mingw-w64-ucrt-x86_64-gst-plugins-bad
+            mingw-w64-ucrt-x86_64-gst-plugins-ugly
+            mingw-w64-ucrt-x86_64-glib2
+            mingw-w64-ucrt-x86_64-nodejs
+            mingw-w64-ucrt-x86_64-ffmpeg
+            mingw-w64-ucrt-x86_64-imagemagick
+            mingw-w64-ucrt-x86_64-python-pillow
+            git
+
+      - name: Install Python dependencies
+        run: |
+          pip install --no-build-isolation --break-system-packages -r requirements-windows.txt
+          pip install --no-build-isolation --break-system-packages pystray
+
+      - name: Build Rust binaries (native Windows toolchain)
+        shell: pwsh
+        run: |
+          # Copy icon into Rust project for embedding
+          Copy-Item "windows/mixtapes.ico" "windows/bridge/mixtapes.ico"
+          cd windows/bridge
+          cargo build --release 2>&1
+          Write-Host "Rust binaries built:"
+          Get-ChildItem target/release/*.exe
+
+      - name: Compile GResources
+        run: |
+          glib-compile-resources --sourcedir=. src/muse.gresource.xml --target=src/muse.gresource
+
+      - name: Smoke test - verify imports work
+        run: |
+          python -c "
+          import gi
+          gi.require_version('Gtk', '4.0')
+          gi.require_version('Adw', '1')
+          gi.require_version('Gst', '1.0')
+          from gi.repository import Gtk, Adw, Gst, Gio, GLib
+          print('GTK4 version:', Gtk.get_major_version(), Gtk.get_minor_version())
+          print('Libadwaita available: OK')
+          Gst.init(None)
+          print('GStreamer initialized: OK')
+          print('All core imports successful!')
+          "
+
+      - name: Bundle application
+        run: |
+          mkdir -p dist/mixtapes
+          MSYS_ROOT="/$MSYSTEM"
+          PYTHON_VER=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+
+          # Copy app source and compile to .pyc (keep .py so launcher references work)
+          cp -r src dist/mixtapes/
+          python -m compileall -b -q dist/mixtapes/src/
+          find dist/mixtapes/src -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+
+          # Copy assets
+          cp -r assets dist/mixtapes/
+
+          # Copy Rust launcher to root, helpers to windows/
+          cp windows/bridge/target/release/Mixtapes.exe dist/mixtapes/
+          mkdir -p dist/mixtapes/windows
+          cp windows/bridge/target/release/MixtapesBridge.exe dist/mixtapes/windows/
+          cp windows/mixtapes.ico dist/mixtapes/windows/
+          cp windows/mixtapes_256.png dist/mixtapes/windows/mixtapes.png
+          cp dist/MixtapesLogin.exe dist/mixtapes/windows/ 2>/dev/null || true
+
+          # Bundle Adwaita Sans font
+          mkdir -p dist/mixtapes/fonts
+          cp windows/fonts/*.ttf dist/mixtapes/fonts/
+
+          # Copy runtime binaries
+          echo "Copying runtime binaries..."
+          mkdir -p dist/mixtapes/runtime
+          cp -r $MSYS_ROOT/bin dist/mixtapes/runtime/
+
+          echo "Copying Python standard library..."
+          mkdir -p dist/mixtapes/runtime/lib
+          cp -r $MSYS_ROOT/lib/python${PYTHON_VER} dist/mixtapes/runtime/lib/
+
+          echo "Copying GI typelibs..."
+          mkdir -p dist/mixtapes/runtime/lib/girepository-1.0
+          cp $MSYS_ROOT/lib/girepository-1.0/*.typelib dist/mixtapes/runtime/lib/girepository-1.0/
+
+          echo "Copying GStreamer plugins..."
+          mkdir -p dist/mixtapes/runtime/lib/gstreamer-1.0
+          cp $MSYS_ROOT/lib/gstreamer-1.0/*.dll dist/mixtapes/runtime/lib/gstreamer-1.0/
+
+          echo "Copying schemas and icons..."
+          mkdir -p dist/mixtapes/runtime/share/glib-2.0/schemas
+          cp $MSYS_ROOT/share/glib-2.0/schemas/gschemas.compiled dist/mixtapes/runtime/share/glib-2.0/schemas/ || true
+          cp -r $MSYS_ROOT/share/icons dist/mixtapes/runtime/share/ || true
+
+          echo "Copying GIO TLS modules and CA certificates..."
+          mkdir -p dist/mixtapes/runtime/lib/gio/modules
+          cp $MSYS_ROOT/lib/gio/modules/*.dll dist/mixtapes/runtime/lib/gio/modules/ || true
+          mkdir -p dist/mixtapes/runtime/ssl/certs
+          cp $MSYS_ROOT/ssl/certs/ca-bundle.crt dist/mixtapes/runtime/ssl/certs/ || true
+          cp $MSYS_ROOT/etc/ssl/certs/ca-bundle.crt dist/mixtapes/runtime/ssl/certs/ 2>/dev/null || true
+
+          # Debug launcher (bat)
+          printf '@echo off\r\nset MYDIR=%%~dp0\r\nset PATH=%%MYDIR%%runtime\\bin;%%PATH%%\r\nset PYTHONHOME=%%MYDIR%%runtime\r\nset GI_TYPELIB_PATH=%%MYDIR%%runtime\\lib\\girepository-1.0\r\nset GST_PLUGIN_PATH=%%MYDIR%%runtime\\lib\\gstreamer-1.0\r\nset GIO_MODULE_DIR=%%MYDIR%%runtime\\lib\\gio\\modules\r\nset GSETTINGS_SCHEMA_DIR=%%MYDIR%%runtime\\share\\glib-2.0\\schemas\r\nset SSL_CERT_FILE=%%MYDIR%%runtime\\ssl\\certs\\ca-bundle.crt\r\nset XDG_DATA_DIRS=%%MYDIR%%runtime\\share\r\nset PYTHONPATH=%%MYDIR%%src\r\n"%%MYDIR%%runtime\\bin\\python3.exe" "%%MYDIR%%src\\main.py" %%*\r\n' > dist/mixtapes/mixtapes-debug.bat
+
+      - name: Brand Python executables with app icon and metadata
+        shell: pwsh
+        run: |
+          # Download rcedit
+          Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile "rcedit.exe"
+
+          # Brand pythonw.exe (the actual process that owns the window/taskbar entry)
+          $pythonw = "dist/mixtapes/runtime/bin/pythonw.exe"
+          $python3 = "dist/mixtapes/runtime/bin/python3.exe"
+          $ico = "windows/mixtapes.ico"
+
+          # Brand all relevant executables
+          $allExes = @($pythonw, $python3,
+            "dist/mixtapes/Mixtapes.exe",
+            "dist/mixtapes/windows/MixtapesBridge.exe"
+          )
+          foreach ($exe in $allExes) {
+            if (Test-Path $exe) {
+              Write-Host "Branding $exe..."
+              ./rcedit.exe $exe --set-icon $ico
+              ./rcedit.exe $exe --set-version-string "ProductName" "Mixtapes"
+              ./rcedit.exe $exe --set-version-string "FileDescription" "Mixtapes"
+              ./rcedit.exe $exe --set-version-string "CompanyName" "pocoguy"
+              ./rcedit.exe $exe --set-version-string "OriginalFilename" "Mixtapes.exe"
+              ./rcedit.exe $exe --set-file-version "1.0.0"
+              ./rcedit.exe $exe --set-product-version "1.0.0"
+            }
+          }
+
+          echo "Bundle size:"
+          du -sh dist/mixtapes
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          # Inno Setup is pre-installed on windows-latest
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            # Try alternative path
+            $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          }
+          if (-not $iscc) {
+            Write-Host "Inno Setup not found, installing..."
+            choco install innosetup -y --no-progress
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+
+          # Build the installer, pointing SourcePath to the bundle dir
+          & $iscc /DSourcePath="$((Resolve-Path 'dist/mixtapes').Path)" windows/installer.iss
+          Write-Host "Installer built:"
+          Get-ChildItem windows/Output/MixtapesSetup.exe
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mixtapes-windows-x86_64-portable
+          path: dist/mixtapes/
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: mixtapes-windows-x86_64-setup
+          path: windows/Output/MixtapesSetup.exe
+
+      - name: Upload MSYS2 environment info
+        if: always()
+        run: |
+          echo '=== MSYS2 Package Versions ==='
+          pacman -Q | grep -E '(gtk4|libadwaita|gstreamer|python|gobject)'
+          echo ''
+          echo '=== Python Packages ==='
+          pip list

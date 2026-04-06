@@ -1,4 +1,5 @@
 import gi
+import sys
 import threading
 import random
 import os
@@ -8,12 +9,26 @@ gi.require_version("GstAudio", "1.0")
 from gi.repository import Gst, GstAudio, GObject, GLib, GdkPixbuf
 import glob
 from yt_dlp import YoutubeDL
-from mprisify.server import Server
 from ui.utils import get_high_res_url, get_ytimg_fallbacks
-from player.mpris import MuseMprisAdapter, MuseEventAdapter
 from player.cache import StreamCache
 from player.downloads import DownloadManager
 from api.client import MusicClient
+
+HAS_MPRIS = False
+HAS_SMTC = False
+if sys.platform == "win32":
+    try:
+        from player.smtc import SMTCAdapter
+        HAS_SMTC = True
+    except ImportError:
+        pass
+else:
+    try:
+        from mprisify.server import Server
+        from player.mpris import MuseMprisAdapter, MuseEventAdapter
+        HAS_MPRIS = True
+    except ImportError:
+        pass
 
 
 class Player(GObject.Object):
@@ -112,20 +127,32 @@ class Player(GObject.Object):
         # Timer for progress
         GObject.timeout_add(100, self.update_position)
 
-        # MPRIS Setup
-        self.mpris_adapter = MuseMprisAdapter(self)
-        self.mpris_server = Server("Mixtapes", adapter=self.mpris_adapter)
-        self.mpris_events = MuseEventAdapter(
-            self.mpris_server.root, self.mpris_server.player
-        )
-        self.mpris_server.set_event_adapter(self.mpris_events)
-        self.mpris_server.loop(background=True)
+        # MPRIS Setup (Linux-only, requires D-Bus)
+        if HAS_MPRIS:
+            self.mpris_adapter = MuseMprisAdapter(self)
+            self.mpris_server = Server("Mixtapes", adapter=self.mpris_adapter)
+            self.mpris_events = MuseEventAdapter(
+                self.mpris_server.root, self.mpris_server.player
+            )
+            self.mpris_server.set_event_adapter(self.mpris_events)
+            self.mpris_server.loop(background=True)
 
-        # Connect signals for MPRIS updates
-        self.connect("state-changed", self._on_mpris_state_changed)
-        self.connect("metadata-changed", self._on_mpris_metadata_changed)
-        self.connect("progression", self._on_mpris_progression)
-        self.connect("volume-changed", self._on_mpris_volume_changed)
+            # Connect signals for MPRIS updates
+            self.connect("state-changed", self._on_mpris_state_changed)
+            self.connect("metadata-changed", self._on_mpris_metadata_changed)
+            self.connect("progression", self._on_mpris_progression)
+            self.connect("volume-changed", self._on_mpris_volume_changed)
+
+        # SMTC Setup (Windows-only)
+        if HAS_SMTC:
+            try:
+                self.smtc = SMTCAdapter(self)
+                self.connect("state-changed", self._on_smtc_state_changed)
+                self.connect("metadata-changed", self._on_smtc_metadata_changed)
+                self.connect("progression", self._on_smtc_progression)
+            except Exception as e:
+                print(f"SMTC init failed: {e}")
+                self.smtc = None
 
     def _on_mpris_state_changed(self, obj, state):
         print(f"DEBUG-MPRIS-STATE-START: state={state}")
@@ -154,6 +181,21 @@ class Player(GObject.Object):
 
     def _on_mpris_volume_changed(self, obj, volume, muted):
         self.mpris_events.on_volume()
+
+    def _on_smtc_state_changed(self, obj, state):
+        if hasattr(self, "smtc") and self.smtc:
+            self.smtc.update_playback_status(state)
+            can_next = self.current_queue_index + 1 < len(self.queue)
+            can_prev = self.current_queue_index > 0
+            self.smtc.update_controls(can_next=can_next, can_previous=can_prev)
+
+    def _on_smtc_metadata_changed(self, obj, title, artist, thumb, video_id, like_status):
+        if hasattr(self, "smtc") and self.smtc:
+            self.smtc.update_metadata(title, artist, thumb)
+
+    def _on_smtc_progression(self, obj, pos, dur):
+        if hasattr(self, "smtc") and self.smtc:
+            self.smtc.update_timeline(pos, dur)
 
     def load_video(
         self, video_id, title="Loading...", artist="Unknown", thumbnail_url=None
@@ -515,7 +557,9 @@ class Player(GObject.Object):
         local_path = self.download_manager.get_local_path(video_id)
         if local_path:
             print(f"[OFFLINE] Playing local file: {local_path}")
-            GLib.idle_add(self._start_playback, f"file://{local_path}")
+            file_uri = GLib.filename_to_uri(os.path.abspath(local_path), None)
+            self._used_cached_url = False
+            GLib.idle_add(self._start_playback, file_uri)
             return
 
         # Check stream URL cache - skip yt-dlp if we have a valid cached URL
