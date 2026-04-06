@@ -1,7 +1,8 @@
 //! MixtapesBridge - Native Windows SMTC bridge
 //!
 //! Communicates with the Mixtapes Python app via stdin/stdout JSON messages.
-//! Provides System Media Transport Controls (SMTC) integration.
+//! Uses GetForWindow() with a hidden HWND so Windows resolves the app identity
+//! from this process's exe metadata (set via rcedit).
 //!
 //! Protocol (stdin, one JSON per line):
 //!   {"cmd": "update_status", "status": "playing"|"paused"|"stopped"|"loading"}
@@ -16,13 +17,13 @@
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
 use windows::Foundation::Uri;
-use windows::Media::Playback::MediaPlayer;
 use windows::Media::{
     MediaPlaybackStatus, MediaPlaybackType, SystemMediaTransportControls,
     SystemMediaTransportControlsButton, SystemMediaTransportControlsButtonPressedEventArgs,
     SystemMediaTransportControlsTimelineProperties,
 };
 use windows::Storage::Streams::RandomAccessStreamReference;
+use windows::Win32::System::WinRT::ISystemMediaTransportControlsInterop;
 
 #[derive(Deserialize)]
 struct Command {
@@ -64,50 +65,94 @@ fn send_event(button: &str) {
     }
 }
 
-fn setup_smtc() -> windows::core::Result<(MediaPlayer, SystemMediaTransportControls)> {
-    // Set AppUserModelID so SMTC shows "Mixtapes" instead of "Unknown app"
+/// Create a hidden window and get SMTC via GetForWindow (like Firefox does).
+/// This makes Windows resolve the app name from our exe's VersionInfo metadata.
+fn setup_smtc() -> windows::core::Result<SystemMediaTransportControls> {
     unsafe {
+        // Set AppUserModelID
         windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(
             windows::core::w!("com.pocoguy.Muse").as_ptr(),
         );
+
+        // Register a minimal window class
+        let class_name = windows::core::w!("MixtapesBridgeClass");
+        let hinstance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(
+            std::ptr::null(),
+        );
+
+        let wc = windows_sys::Win32::UI::WindowsAndMessaging::WNDCLASSW {
+            lpfnWndProc: Some(windows_sys::Win32::UI::WindowsAndMessaging::DefWindowProcW),
+            hInstance: hinstance,
+            lpszClassName: class_name.as_ptr(),
+            style: 0,
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hIcon: std::ptr::null_mut(),
+            hCursor: std::ptr::null_mut(),
+            hbrBackground: std::ptr::null_mut(),
+            lpszMenuName: std::ptr::null(),
+        };
+        windows_sys::Win32::UI::WindowsAndMessaging::RegisterClassW(&wc);
+
+        // Create a hidden message-only window
+        let hwnd = windows_sys::Win32::UI::WindowsAndMessaging::CreateWindowExW(
+            0,
+            class_name.as_ptr(),
+            windows::core::w!("Mixtapes").as_ptr(),
+            0, // no style (hidden)
+            0, 0, 0, 0,
+            // HWND_MESSAGE makes it a message-only window (invisible)
+            -3isize as *mut _, // HWND_MESSAGE
+            std::ptr::null_mut(),
+            hinstance,
+            std::ptr::null(),
+        );
+
+        if hwnd.is_null() {
+            return Err(windows::core::Error::from_win32());
+        }
+
+        // Get SMTC via the interop interface bound to our HWND
+        let interop: ISystemMediaTransportControlsInterop =
+            windows::core::factory::<
+                SystemMediaTransportControls,
+                ISystemMediaTransportControlsInterop,
+            >()?;
+
+        let smtc: SystemMediaTransportControls =
+            interop.GetForWindow(windows::Win32::Foundation::HWND(hwnd as *mut _))?;
+
+        // Enable controls
+        smtc.SetIsEnabled(true)?;
+        smtc.SetIsPlayEnabled(true)?;
+        smtc.SetIsPauseEnabled(true)?;
+        smtc.SetIsNextEnabled(true)?;
+        smtc.SetIsPreviousEnabled(true)?;
+        smtc.SetIsStopEnabled(true)?;
+        smtc.SetPlaybackStatus(MediaPlaybackStatus::Closed)?;
+
+        // Handle button presses
+        smtc.ButtonPressed(
+            &windows::Foundation::TypedEventHandler::<
+                SystemMediaTransportControls,
+                SystemMediaTransportControlsButtonPressedEventArgs,
+            >::new(|_, args| {
+                let button = args.as_ref().unwrap().Button()?;
+                let name = match button {
+                    SystemMediaTransportControlsButton::Play => "play",
+                    SystemMediaTransportControlsButton::Pause => "pause",
+                    SystemMediaTransportControlsButton::Next => "next",
+                    SystemMediaTransportControlsButton::Previous => "previous",
+                    SystemMediaTransportControlsButton::Stop => "stop",
+                    _ => return Ok(()),
+                };
+                send_event(name);
+                Ok(())
+            }),
+        )?;
+
+        Ok(smtc)
     }
-
-    let player = MediaPlayer::new()?;
-    let smtc = player.SystemMediaTransportControls()?;
-
-    // Disable auto-integration
-    player.CommandManager()?.SetIsEnabled(false)?;
-
-    // Enable controls
-    smtc.SetIsEnabled(true)?;
-    smtc.SetIsPlayEnabled(true)?;
-    smtc.SetIsPauseEnabled(true)?;
-    smtc.SetIsNextEnabled(true)?;
-    smtc.SetIsPreviousEnabled(true)?;
-    smtc.SetIsStopEnabled(true)?;
-    smtc.SetPlaybackStatus(MediaPlaybackStatus::Closed)?;
-
-    // Handle button presses
-    smtc.ButtonPressed(
-        &windows::Foundation::TypedEventHandler::<
-            SystemMediaTransportControls,
-            SystemMediaTransportControlsButtonPressedEventArgs,
-        >::new(|_, args| {
-            let button = args.as_ref().unwrap().Button()?;
-            let name = match button {
-                SystemMediaTransportControlsButton::Play => "play",
-                SystemMediaTransportControlsButton::Pause => "pause",
-                SystemMediaTransportControlsButton::Next => "next",
-                SystemMediaTransportControlsButton::Previous => "previous",
-                SystemMediaTransportControlsButton::Stop => "stop",
-                _ => return Ok(()),
-            };
-            send_event(name);
-            Ok(())
-        }),
-    )?;
-
-    Ok((player, smtc))
 }
 
 fn handle_command(
@@ -140,7 +185,9 @@ fn handle_command(
             }
             if let Some(thumb_url) = &cmd.thumbnail {
                 if thumb_url.starts_with("http") {
-                    if let Ok(uri) = Uri::CreateUri(&windows::core::HSTRING::from(thumb_url.as_str())) {
+                    if let Ok(uri) =
+                        Uri::CreateUri(&windows::core::HSTRING::from(thumb_url.as_str()))
+                    {
                         if let Ok(stream_ref) = RandomAccessStreamReference::CreateFromUri(&uri) {
                             let _ = updater.SetThumbnail(&stream_ref);
                         }
@@ -181,11 +228,11 @@ fn handle_command(
 }
 
 fn main() {
-    // Hide console window (bridge communicates via stdin/stdout, not a visible console)
+    // Hide console window
     unsafe {
         let console = windows_sys::Win32::System::Console::GetConsoleWindow();
         if !console.is_null() {
-            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(console, 0); // SW_HIDE
+            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(console, 0);
         }
     }
 
@@ -197,8 +244,8 @@ fn main() {
         let _ = handle.flush();
     }
 
-    let (player, smtc) = match setup_smtc() {
-        Ok(result) => result,
+    let smtc = match setup_smtc() {
+        Ok(s) => s,
         Err(e) => {
             let mut handle = stdout.lock();
             let _ = writeln!(
@@ -210,16 +257,6 @@ fn main() {
             return;
         }
     };
-
-    // Set initial display info so SMTC doesn't show "Unknown app"
-    {
-        let updater = smtc.DisplayUpdater().unwrap();
-        updater.SetType(MediaPlaybackType::Music).unwrap();
-        let props = updater.MusicProperties().unwrap();
-        let _ = props.SetTitle(&windows::core::HSTRING::from("Mixtapes"));
-        let _ = props.SetArtist(&windows::core::HSTRING::from(""));
-        let _ = updater.Update();
-    }
 
     {
         let mut handle = stdout.lock();
@@ -250,11 +287,9 @@ fn main() {
                     }
                 }
             }
-            Err(_) => break, // stdin closed
+            Err(_) => break,
         }
     }
 
-    // Keep player alive until we exit so SMTC doesn't disappear
     drop(smtc);
-    drop(player);
 }
