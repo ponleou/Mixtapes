@@ -37,11 +37,47 @@ jobs:
             mingw-w64-ucrt-x86_64-glib2
             mingw-w64-ucrt-x86_64-nodejs
             mingw-w64-ucrt-x86_64-ffmpeg
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-imagemagick
             git
 
       - name: Install Python dependencies
         run: |
           pip install --no-build-isolation -r requirements-windows.txt
+
+      - name: Download Adwaita Sans font
+        run: |
+          mkdir -p windows/fonts
+          FONT_URL="https://github.com/nicoverbruggen/adwaita-fonts/releases/download/v50.1/AdwaitaSans-Regular.otf"
+          FONT_BOLD_URL="https://github.com/nicoverbruggen/adwaita-fonts/releases/download/v50.1/AdwaitaSans-Bold.otf"
+          curl -sL "$FONT_URL" -o windows/fonts/AdwaitaSans-Regular.otf
+          curl -sL "$FONT_BOLD_URL" -o windows/fonts/AdwaitaSans-Bold.otf
+          ls -la windows/fonts/
+
+      - name: Generate icon and compile launcher
+        run: |
+          # Convert SVG app icon to ICO (multi-size)
+          SVG_ICON="build-dir/files/share/icons/hicolor/scalable/apps/com.pocoguy.Muse.svg"
+          if [ ! -f "$SVG_ICON" ]; then
+            SVG_ICON="assets/icons/hicolor/scalable/actions/compass2-symbolic.svg"
+          fi
+
+          magick "$SVG_ICON" -background none -resize 256x256 windows/mixtapes_256.png
+          magick windows/mixtapes_256.png \
+            \( -clone 0 -resize 16x16 \) \
+            \( -clone 0 -resize 32x32 \) \
+            \( -clone 0 -resize 48x48 \) \
+            \( -clone 0 -resize 64x64 \) \
+            \( -clone 0 -resize 128x128 \) \
+            \( -clone 0 -resize 256x256 \) \
+            -delete 0 windows/mixtapes.ico
+
+          # Compile the native .exe launcher
+          cd windows
+          windres launcher.rc -o launcher_res.o
+          gcc -mwindows -O2 -o Mixtapes.exe launcher.c launcher_res.o
+          echo "Launcher compiled:"
+          ls -la Mixtapes.exe
 
       - name: Compile GResources
         run: |
@@ -62,38 +98,45 @@ jobs:
           print('All core imports successful!')
           "
 
-      - name: Smoke test - app module imports
-        run: |
-          cd src
-          python -c "
-          import sys
-          sys.path.insert(0, '.')
-          import gi
-          gi.require_version('Gtk', '4.0')
-          gi.require_version('Adw', '1')
-          gi.require_version('Gst', '1.0')
-          gi.require_version('GstAudio', '1.0')
-          from gi.repository import Gtk, Adw, Gst
-          Gst.init(None)
-          from api.client import MusicClient
-          from player.cache import StreamCache
-          from player.downloads import DownloadManager
-          print('App module imports successful!')
-          "
-
       - name: Bundle application
         run: |
           mkdir -p dist/mixtapes
           MSYS_ROOT="/$MSYSTEM"
           PYTHON_VER=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 
-          # Copy app source and assets
-          cp -r src dist/mixtapes/
-          cp requirements-windows.txt dist/mixtapes/
+          # Compile .py to .pyc and copy
+          echo "Compiling Python source to bytecode..."
+          python -m compileall -b -q src/
+          mkdir -p dist/mixtapes/src
+          # Copy .pyc files preserving directory structure, then copy non-.py files
+          cd src
+          find . -name '*.pyc' | while read f; do
+            dir=$(dirname "$f")
+            mkdir -p "../dist/mixtapes/src/$dir"
+            cp "$f" "../dist/mixtapes/src/$f"
+          done
+          # Copy non-Python files (CSS, gresource, XML, etc.)
+          find . -type f ! -name '*.py' ! -name '*.pyc' ! -path './__pycache__/*' | while read f; do
+            dir=$(dirname "$f")
+            mkdir -p "../dist/mixtapes/src/$dir"
+            cp "$f" "../dist/mixtapes/src/$f"
+          done
+          cd ..
+
+          # Copy assets
           cp -r assets dist/mixtapes/
 
-          # Copy the entire MSYS2 UCRT64 prefix (bin, lib, share)
-          # This is large but guarantees nothing is missing
+          # Copy .exe launcher and icon
+          cp windows/Mixtapes.exe dist/mixtapes/
+          cp windows/mixtapes.ico dist/mixtapes/windows/mixtapes.ico 2>/dev/null || true
+          mkdir -p dist/mixtapes/windows
+          cp windows/mixtapes.ico dist/mixtapes/windows/
+
+          # Copy fonts
+          mkdir -p dist/mixtapes/share/fonts
+          cp windows/fonts/*.otf dist/mixtapes/share/fonts/
+
+          # Copy runtime binaries
           echo "Copying runtime binaries..."
           mkdir -p dist/mixtapes/runtime
           cp -r $MSYS_ROOT/bin dist/mixtapes/runtime/
@@ -122,8 +165,12 @@ jobs:
           cp $MSYS_ROOT/ssl/certs/ca-bundle.crt dist/mixtapes/runtime/ssl/certs/ || true
           cp $MSYS_ROOT/etc/ssl/certs/ca-bundle.crt dist/mixtapes/runtime/ssl/certs/ 2>/dev/null || true
 
-          # Create launcher bat
-          printf '@echo off\r\nset MYDIR=%%~dp0\r\nset PATH=%%MYDIR%%runtime\\bin;%%PATH%%\r\nset PYTHONHOME=%%MYDIR%%runtime\r\nset GI_TYPELIB_PATH=%%MYDIR%%runtime\\lib\\girepository-1.0\r\nset GST_PLUGIN_PATH=%%MYDIR%%runtime\\lib\\gstreamer-1.0\r\nset GIO_MODULE_DIR=%%MYDIR%%runtime\\lib\\gio\\modules\r\nset GSETTINGS_SCHEMA_DIR=%%MYDIR%%runtime\\share\\glib-2.0\\schemas\r\nset SSL_CERT_FILE=%%MYDIR%%runtime\\ssl\\certs\\ca-bundle.crt\r\nset XDG_DATA_DIRS=%%MYDIR%%runtime\\share\r\nset PYTHONPATH=%%MYDIR%%src\r\n"%%MYDIR%%runtime\\bin\\python3.exe" "%%MYDIR%%src\\main.py" %%*\r\n' > dist/mixtapes/mixtapes.bat
+          # Install fonts into runtime share for fontconfig discovery
+          mkdir -p dist/mixtapes/runtime/share/fonts/adwaita-sans
+          cp windows/fonts/*.otf dist/mixtapes/runtime/share/fonts/adwaita-sans/
+
+          # Keep the .bat as a debug launcher
+          printf '@echo off\r\nset MYDIR=%%~dp0\r\nset PATH=%%MYDIR%%runtime\\bin;%%PATH%%\r\nset PYTHONHOME=%%MYDIR%%runtime\r\nset GI_TYPELIB_PATH=%%MYDIR%%runtime\\lib\\girepository-1.0\r\nset GST_PLUGIN_PATH=%%MYDIR%%runtime\\lib\\gstreamer-1.0\r\nset GIO_MODULE_DIR=%%MYDIR%%runtime\\lib\\gio\\modules\r\nset GSETTINGS_SCHEMA_DIR=%%MYDIR%%runtime\\share\\glib-2.0\\schemas\r\nset SSL_CERT_FILE=%%MYDIR%%runtime\\ssl\\certs\\ca-bundle.crt\r\nset XDG_DATA_DIRS=%%MYDIR%%runtime\\share\r\nset PYTHONPATH=%%MYDIR%%src\r\n"%%MYDIR%%runtime\\bin\\python3.exe" "%%MYDIR%%src\\main.py" %%*\r\n' > dist/mixtapes/mixtapes-debug.bat
 
           echo "Bundle size:"
           du -sh dist/mixtapes

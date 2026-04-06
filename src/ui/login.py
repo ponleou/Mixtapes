@@ -8,7 +8,14 @@ from gi.repository import Gtk, Adw, GObject
 from api.client import MusicClient
 
 HAS_WEBKIT = False
-if sys.platform != "win32":
+HAS_PYWEBVIEW = False
+if sys.platform == "win32":
+    try:
+        import webview
+        HAS_PYWEBVIEW = True
+    except ImportError:
+        pass
+else:
     try:
         gi.require_version("WebKit", "6.0")
         from ui.login_webview import WebkitLoginView
@@ -42,12 +49,15 @@ class LoginDialog(Adw.Window):
         # Access content via view stack
         self.stack = Adw.ViewStack()
 
-        # 0. Direct Webkit View (Linux-only, requires WebKitGTK)
+        # 0. Direct Login (WebKitGTK on Linux, pywebview on Windows)
         self.webkit_view = None
         if HAS_WEBKIT:
             self.webkit_view = WebkitLoginView()
             self.webkit_view.connect("login-finished", self.on_webkit_login_finished)
             self.stack.add_titled(self.webkit_view, "direct", "Direct Login")
+        elif HAS_PYWEBVIEW:
+            webview_page = self._build_pywebview_page()
+            self.stack.add_titled(webview_page, "direct", "Direct Login")
 
         # 1. Browser View
         browser_view = self._build_browser_view()
@@ -148,6 +158,57 @@ class LoginDialog(Adw.Window):
         page.set_child(clamp)
 
         return page
+
+    def _build_pywebview_page(self):
+        page = Adw.StatusPage()
+        page.set_title("Direct Login")
+        page.set_description("Login via a browser window powered by Edge WebView2.")
+        page.set_icon_name("web-browser-symbolic")
+
+        clamp = Adw.Clamp()
+        clamp.set_maximum_size(500)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+
+        self.pywebview_status = Gtk.Label(label="")
+        box.append(self.pywebview_status)
+
+        btn = Gtk.Button(label="Open Login Window")
+        btn.set_halign(Gtk.Align.CENTER)
+        btn.add_css_class("pill")
+        btn.add_css_class("suggested-action")
+        btn.connect("clicked", self._on_pywebview_login)
+        box.append(btn)
+
+        clamp.set_child(box)
+        page.set_child(clamp)
+        return page
+
+    def _on_pywebview_login(self, btn):
+        from gi.repository import GLib
+        from ui.login_webview_win import WindowsLoginCapture
+
+        self.pywebview_status.set_markup(
+            "<span color='blue'>Login window opened. Sign in and wait...</span>"
+        )
+
+        def on_success(headers_json):
+            GLib.idle_add(self._on_pywebview_result, headers_json)
+
+        capture = WindowsLoginCapture(on_success=on_success)
+        capture.start()
+
+    def _on_pywebview_result(self, headers_json):
+        client = MusicClient()
+        if client.login(headers_json):
+            self.pywebview_status.set_markup(
+                "<span color='green'>Login Successful!</span>"
+            )
+            self.close()
+        else:
+            self.pywebview_status.set_markup(
+                "<span color='red'>Login Failed. Try again or use another method.</span>"
+            )
 
     def on_webkit_login_finished(self, view, success, headers_json):
         if success:

@@ -1,4 +1,5 @@
 import os
+import sys
 import threading
 import gi
 
@@ -7,6 +8,14 @@ gi.require_version("Adw", "1")
 
 from gi.repository import Gtk, Gdk, Adw, GObject, Gio, GLib, Pango
 from player.player import Player
+
+HAS_TRAY = False
+if sys.platform == "win32":
+    try:
+        from ui.tray_win import TrayIcon
+        HAS_TRAY = True
+    except ImportError:
+        pass
 
 
 class MainWindow(Adw.ApplicationWindow):
@@ -740,7 +749,12 @@ class MainWindow(Adw.ApplicationWindow):
         """Hide window instead of quitting if there are songs in the queue."""
         if self.player.queue and self.player.current_queue_index >= 0:
             self.set_visible(False)
+            if HAS_TRAY and not hasattr(self, "_tray_icon"):
+                self._tray_icon = TrayIcon(self, self.player)
+                self._tray_icon.show()
             return True  # Prevent default close
+        if HAS_TRAY and hasattr(self, "_tray_icon"):
+            self._tray_icon.hide()
         return False  # Allow normal close
 
     def _on_force_quit(self, action, param):
