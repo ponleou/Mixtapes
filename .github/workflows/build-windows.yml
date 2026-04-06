@@ -130,6 +130,7 @@ jobs:
           mkdir -p dist/mixtapes/windows
           cp windows/bridge/target/release/MixtapesBridge.exe dist/mixtapes/windows/
           cp windows/mixtapes.ico dist/mixtapes/windows/
+          cp windows/mixtapes_256.png dist/mixtapes/windows/mixtapes.png
           cp dist/MixtapesLogin.exe dist/mixtapes/windows/ 2>/dev/null || true
 
           # Bundle Adwaita Sans font
