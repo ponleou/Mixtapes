@@ -1,6 +1,6 @@
+#![windows_subsystem = "windows"]
 //! Mixtapes Windows Launcher
 //! Sets up the MSYS2 environment and launches the Python app.
-//! Uses -mwindows (no console window) via build.rs.
 
 use std::env;
 use std::path::PathBuf;

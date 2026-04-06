@@ -65,6 +65,13 @@ fn send_event(button: &str) {
 }
 
 fn setup_smtc() -> windows::core::Result<(MediaPlayer, SystemMediaTransportControls)> {
+    // Set AppUserModelID so SMTC shows "Mixtapes" instead of "Unknown app"
+    unsafe {
+        windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(
+            windows::core::w!("com.pocoguy.Muse").as_ptr(),
+        );
+    }
+
     let player = MediaPlayer::new()?;
     let smtc = player.SystemMediaTransportControls()?;
 
@@ -174,6 +181,14 @@ fn handle_command(
 }
 
 fn main() {
+    // Hide console window (bridge communicates via stdin/stdout, not a visible console)
+    unsafe {
+        let console = windows_sys::Win32::System::Console::GetConsoleWindow();
+        if !console.is_null() {
+            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(console, 0); // SW_HIDE
+        }
+    }
+
     // Signal readiness
     let stdout = io::stdout();
     {

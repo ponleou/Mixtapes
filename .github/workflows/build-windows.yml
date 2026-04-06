@@ -26,14 +26,6 @@ jobs:
           Write-Host "Login helper built:"
           Get-ChildItem dist/MixtapesLogin.exe
 
-      - name: Build Rust binaries (native Windows toolchain)
-        shell: pwsh
-        run: |
-          cd windows/bridge
-          cargo build --release
-          Write-Host "Rust binaries built:"
-          Get-ChildItem target/release/*.exe
-
       - name: Download Adwaita Sans font
         shell: pwsh
         run: |
@@ -86,6 +78,16 @@ jobs:
             \( -clone 0 -resize 128x128 \) \
             \( -clone 0 -resize 256x256 \) \
             -delete 0 windows/mixtapes.ico
+
+      - name: Build Rust binaries (native Windows toolchain)
+        shell: pwsh
+        run: |
+          # Copy icon into Rust project for embedding
+          Copy-Item "windows/mixtapes.ico" "windows/bridge/mixtapes.ico"
+          cd windows/bridge
+          cargo build --release 2>&1
+          Write-Host "Rust binaries built:"
+          Get-ChildItem target/release/*.exe
 
       - name: Compile GResources
         run: |

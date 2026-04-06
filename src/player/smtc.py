@@ -41,6 +41,8 @@ class SMTCAdapter:
             return
 
         try:
+            # CREATE_NO_WINDOW prevents a console flash on Windows
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             self._proc = subprocess.Popen(
                 [bridge],
                 stdin=subprocess.PIPE,
@@ -48,6 +50,7 @@ class SMTCAdapter:
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                creationflags=creationflags,
             )
             self._reader_thread = threading.Thread(target=self._read_events, daemon=True)
             self._reader_thread.start()
