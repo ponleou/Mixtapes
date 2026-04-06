@@ -201,11 +201,37 @@ jobs:
           echo "Bundle size:"
           du -sh dist/mixtapes
 
-      - name: Upload artifact
+      - name: Build installer
+        shell: pwsh
+        run: |
+          # Inno Setup is pre-installed on windows-latest
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            # Try alternative path
+            $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          }
+          if (-not $iscc) {
+            Write-Host "Inno Setup not found, installing..."
+            choco install innosetup -y --no-progress
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+
+          # Build the installer, pointing SourcePath to the bundle dir
+          & $iscc /DSourcePath="$((Resolve-Path 'dist/mixtapes').Path)" windows/installer.iss
+          Write-Host "Installer built:"
+          Get-ChildItem windows/Output/MixtapesSetup.exe
+
+      - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mixtapes-windows-x86_64
+          name: mixtapes-windows-x86_64-portable
           path: dist/mixtapes/
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: mixtapes-windows-x86_64-setup
+          path: windows/Output/MixtapesSetup.exe
 
       - name: Upload MSYS2 environment info
         if: always()
