@@ -180,7 +180,12 @@ jobs:
           $python3 = "dist/mixtapes/runtime/bin/python3.exe"
           $ico = "windows/mixtapes.ico"
 
-          foreach ($exe in @($pythonw, $python3)) {
+          # Brand all relevant executables
+          $allExes = @($pythonw, $python3,
+            "dist/mixtapes/Mixtapes.exe",
+            "dist/mixtapes/windows/MixtapesBridge.exe"
+          )
+          foreach ($exe in $allExes) {
             if (Test-Path $exe) {
               Write-Host "Branding $exe..."
               ./rcedit.exe $exe --set-icon $ico
@@ -188,6 +193,8 @@ jobs:
               ./rcedit.exe $exe --set-version-string "FileDescription" "Mixtapes"
               ./rcedit.exe $exe --set-version-string "CompanyName" "pocoguy"
               ./rcedit.exe $exe --set-version-string "OriginalFilename" "Mixtapes.exe"
+              ./rcedit.exe $exe --set-file-version "1.0.0"
+              ./rcedit.exe $exe --set-product-version "1.0.0"
             }
           }
 
