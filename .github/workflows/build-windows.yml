@@ -22,11 +22,7 @@ jobs:
         shell: pwsh
         run: |
           pip install pywebview pyinstaller
-          pyinstaller --onefile --noconsole --name MixtapesLogin --icon windows/mixtapes.ico windows/login_helper.py 2>&1
-          if (!(Test-Path "dist/MixtapesLogin.exe")) {
-            # Icon may not exist yet at this point, retry without icon
-            pyinstaller --onefile --noconsole --name MixtapesLogin windows/login_helper.py
-          }
+          pyinstaller --onefile --noconsole --name MixtapesLogin windows/login_helper.py
           Write-Host "Login helper built:"
           Get-ChildItem dist/MixtapesLogin.exe
 
