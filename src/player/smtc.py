@@ -100,14 +100,14 @@ class SMTCAdapter:
             return
 
         try:
+            from datetime import timedelta
+
             props = SystemMediaTransportControlsTimelineProperties()
-            # In pywinrt, TimeSpan properties are plain ints (100-nanosecond ticks)
-            ticks_per_sec = 10_000_000
-            props.start_time = 0
-            props.min_seek_time = 0
-            props.position = int(position_secs * ticks_per_sec)
-            props.max_seek_time = int(duration_secs * ticks_per_sec)
-            props.end_time = int(duration_secs * ticks_per_sec)
+            props.start_time = timedelta(0)
+            props.min_seek_time = timedelta(0)
+            props.position = timedelta(seconds=position_secs)
+            props.max_seek_time = timedelta(seconds=duration_secs)
+            props.end_time = timedelta(seconds=duration_secs)
 
             self._smtc.update_timeline_properties(props)
         except Exception as e:

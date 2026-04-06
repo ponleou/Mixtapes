@@ -50,11 +50,16 @@ jobs:
           pip install --break-system-packages winrt-Windows.Media winrt-Windows.Media.Playback winrt-Windows.Storage.Streams winrt-Windows.Foundation
 
       - name: Download Adwaita Sans font
+        shell: pwsh
         run: |
-          mkdir -p windows/fonts
-          curl -sL "https://gitlab.gnome.org/GNOME/adwaita-fonts/-/raw/main/sans/AdwaitaSans-Regular.ttf?ref_type=heads&inline=false" -o windows/fonts/AdwaitaSans-Regular.ttf
-          curl -sL "https://gitlab.gnome.org/GNOME/adwaita-fonts/-/raw/main/sans/AdwaitaSans-Bold.ttf?ref_type=heads&inline=false" -o windows/fonts/AdwaitaSans-Bold.ttf
-          ls -la windows/fonts/
+          New-Item -ItemType Directory -Force -Path windows/fonts
+          Invoke-WebRequest -Uri "https://gitlab.gnome.org/api/v4/projects/GNOME%2Fadwaita-fonts/repository/files/sans%2FAdwaitaSans-Regular.ttf/raw?ref=main" -OutFile "windows/fonts/AdwaitaSans-Regular.ttf"
+          Invoke-WebRequest -Uri "https://gitlab.gnome.org/api/v4/projects/GNOME%2Fadwaita-fonts/repository/files/sans%2FAdwaitaSans-Bold.ttf/raw?ref=main" -OutFile "windows/fonts/AdwaitaSans-Bold.ttf"
+          Get-ChildItem windows/fonts/
+          # Verify they're actual font files, not HTML
+          $size = (Get-Item "windows/fonts/AdwaitaSans-Regular.ttf").Length
+          Write-Host "Regular font size: $size bytes"
+          if ($size -lt 10000) { throw "Font file too small - likely not a real font" }
 
       - name: Generate icon and compile launcher
         run: |
