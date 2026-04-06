@@ -13,6 +13,8 @@ Writes captured headers JSON to:
 import json
 import os
 import sys
+import time
+import threading
 import webview
 
 
@@ -30,34 +32,69 @@ class LoginCapture:
     def __init__(self, window):
         self.window = window
         self.finished = False
+        self._poll_thread = None
 
     def on_loaded(self):
+        """Start polling cookies once we land on music.youtube.com."""
         if self.finished:
             return
 
         url = self.window.get_current_url() or ""
 
         if "music.youtube.com" in url and "accounts.google.com" not in url:
-            cookies = self.window.evaluate_js("document.cookie")
-            if cookies and ("SAPISID" in cookies or "__Secure-3PAPISID" in cookies):
-                self.finished = True
-                headers = {
-                    "Cookie": cookies,
-                    "User-Agent": self.window.evaluate_js("navigator.userAgent"),
-                }
+            # Start a polling thread to check cookies via get_cookies()
+            if not self._poll_thread:
+                self._poll_thread = threading.Thread(target=self._poll_cookies, daemon=True)
+                self._poll_thread.start()
 
-                output = OUTPUT_PATH or get_default_output()
-                with open(output, "w") as f:
-                    json.dump(headers, f)
+    def _poll_cookies(self):
+        """Poll for auth cookies using pywebview's get_cookies() which sees HttpOnly cookies."""
+        for _ in range(30):  # Try for 30 seconds
+            if self.finished:
+                return
 
-                print(f"Login successful! Headers saved to: {output}")
-                self.window.destroy()
+            try:
+                cookies = self.window.get_cookies()
+                cookie_strs = []
+                has_sapisid = False
+
+                for cookie in cookies:
+                    name = cookie.get("name", "") if isinstance(cookie, dict) else getattr(cookie, "name", "")
+                    value = cookie.get("value", "") if isinstance(cookie, dict) else getattr(cookie, "value", "")
+
+                    if name and value:
+                        cookie_strs.append(f"{name}={value}")
+                        if name in ("SAPISID", "__Secure-3PAPISID"):
+                            has_sapisid = True
+
+                if has_sapisid and cookie_strs:
+                    self.finished = True
+                    ua = self.window.evaluate_js("navigator.userAgent") or ""
+
+                    headers = {
+                        "Cookie": "; ".join(cookie_strs),
+                        "User-Agent": ua,
+                    }
+
+                    output = OUTPUT_PATH or get_default_output()
+                    with open(output, "w") as f:
+                        json.dump(headers, f)
+
+                    print(f"Login successful! Headers saved to: {output}")
+                    self.window.destroy()
+                    return
+
+            except Exception as e:
+                print(f"Cookie poll error: {e}")
+
+            time.sleep(1)
+
+        print("Timed out waiting for auth cookies.")
 
 
 def main():
     global OUTPUT_PATH
 
-    # Parse --output arg
     args = sys.argv[1:]
     for i, arg in enumerate(args):
         if arg == "--output" and i + 1 < len(args):

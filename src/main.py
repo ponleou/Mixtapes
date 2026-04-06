@@ -1,5 +1,30 @@
 import sys
 import os
+
+# On Windows, configure fontconfig to find bundled Adwaita Sans
+# MUST happen before GTK/fontconfig initializes
+if sys.platform == "win32":
+    _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for _candidate in [
+        os.path.join(_base, "share", "fonts"),
+        os.path.join(_base, "runtime", "share", "fonts", "adwaita-sans"),
+    ]:
+        if os.path.isdir(_candidate):
+            import tempfile
+            _fc = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".conf", delete=False, prefix="mixtapes_fc_"
+            )
+            _fc.write(
+                '<?xml version="1.0"?>\n'
+                '<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">\n'
+                "<fontconfig>\n"
+                f'  <dir>{_candidate.replace(chr(92), "/")}</dir>\n'
+                "</fontconfig>\n"
+            )
+            _fc.close()
+            os.environ["FONTCONFIG_FILE"] = _fc.name
+            break
+
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -23,7 +48,7 @@ class MusicApp(Adw.Application):
             resource_path = os.path.join(os.path.dirname(__file__), "muse.gresource")
             resource = Gio.Resource.load(resource_path)
             resource._register()
-            
+
             # Add icon resource path
             Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_resource_path("/com/pocoguy/muse/icons")
         except Exception as e:
@@ -40,34 +65,20 @@ class MusicApp(Adw.Application):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
 
-        # On Windows, override the font to Adwaita Sans (shipped with the bundle)
+        # On Windows, apply Adwaita Sans font via CSS
         if sys.platform == "win32":
-            self._load_windows_font()
+            font_css = Gtk.CssProvider()
+            font_css.load_from_string("* { font-family: 'Adwaita Sans', 'Inter', sans-serif; }")
+            Gtk.StyleContext.add_provider_for_display(
+                Gdk.Display.get_default(),
+                font_css,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+            )
 
         win = self.props.active_window
         if not win:
             win = MainWindow(application=self)
         win.present()
-
-    def _load_windows_font(self):
-        # Register bundled Adwaita Sans with Windows so fontconfig/GTK can find it
-        import ctypes
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        fonts_dir = os.path.join(base, "share", "fonts")
-        if os.path.isdir(fonts_dir):
-            gdi32 = ctypes.windll.gdi32
-            for f in os.listdir(fonts_dir):
-                if f.endswith((".otf", ".ttf")):
-                    path = os.path.join(fonts_dir, f)
-                    gdi32.AddFontResourceExW(path, 0x10, 0)  # FR_PRIVATE
-
-        font_css = Gtk.CssProvider()
-        font_css.load_from_string("* { font-family: 'Adwaita Sans', 'Inter', sans-serif; }")
-        Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(),
-            font_css,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-        )
 
 
 def main():
