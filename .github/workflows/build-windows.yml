@@ -54,7 +54,11 @@ jobs:
         run: |
           pip install --no-build-isolation --break-system-packages -r requirements-windows.txt
           pip install --no-build-isolation --break-system-packages pystray
-          pip install --break-system-packages --only-binary=:all: winrt-Windows.Media winrt-Windows.Media.Playback winrt-Windows.Storage.Streams winrt-Windows.Foundation
+          # winrt wheels are only published for native Windows Python (win_amd64),
+          # not MSYS2/MinGW. Force the platform to download the correct wheels.
+          PYVER=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
+          pip download --break-system-packages --only-binary=:all: --platform win_amd64 --python-version $PYVER --implementation cp -d /tmp/winrt-wheels winrt-Windows.Media winrt-Windows.Media.Playback winrt-Windows.Storage.Streams winrt-Windows.Foundation winrt-runtime
+          pip install --break-system-packages --no-deps /tmp/winrt-wheels/*.whl
 
       - name: Download Adwaita Sans font
         shell: pwsh
