@@ -211,6 +211,10 @@ class PlaylistPage(Adw.Bin):
         action_dl_all.connect("activate", self._on_download_all)
         self.action_group.add_action(action_dl_all)
 
+        action_start_radio = Gio.SimpleAction.new("start_radio", None)
+        action_start_radio.connect("activate", self._on_start_radio)
+        self.action_group.add_action(action_start_radio)
+
         self._is_saved_to_library = False
 
         # We need to track visibility of edit/delete in the menu
@@ -758,11 +762,23 @@ class PlaylistPage(Adw.Bin):
                 t for t in tracks_to_queue if dm.is_downloaded(t.get("videoId"))
             ]
 
-        start_index = 0
+        start_index = -1
         for i, t in enumerate(tracks_to_queue):
             if t.get("videoId") == video_id:
                 start_index = i
                 break
+
+        print(
+            f"\033[95m[DEBUG-CLICK] vid={video_id} found_at={start_index} "
+            f"queue_len={len(tracks_to_queue)} "
+            f"using={'original_tracks' if hasattr(self, 'original_tracks') and self.original_tracks else '_best_queue'}\033[0m"
+        )
+
+        if start_index < 0:
+            # Click target wasn't in tracks_to_queue (shouldn't happen, but
+            # don't silently fall back to playing the first song).
+            print("[DEBUG-CLICK] WARNING: click target not in queue, aborting")
+            return
 
         self.player.set_queue(
             tracks_to_queue,
@@ -908,6 +924,8 @@ class PlaylistPage(Adw.Bin):
         self._dl_done_id = dm.connect("item-done", self._on_dl_item_done)
 
     def _refresh_more_menu(self, is_owned=False):
+        from ui.utils import is_online
+
         self.more_menu_model.remove_all()
 
         # 1. Add All to Playlist Submenu
@@ -921,7 +939,11 @@ class PlaylistPage(Adw.Bin):
 
         self.more_menu_model.append_submenu("Add all to Playlist", self.playlist_menu)
 
-        # 2. Copy Link (Always shown)
+        # 2. Start Radio (online only)
+        if is_online() and (getattr(self, "_audio_playlist_id", None) or self.playlist_id):
+            self.more_menu_model.append("Start Radio", "page.start_radio")
+
+        # 3. Copy Link (Always shown)
         self.more_menu_model.append("Copy Link", "page.copy_link")
 
         # 3. Save/Unsave from Library (not for owned playlists - they're always in library)
@@ -940,6 +962,14 @@ class PlaylistPage(Adw.Bin):
         if is_owned:
             self.more_menu_model.append("Edit Playlist", "page.edit")
             self.more_menu_model.append("Delete Playlist", "page.delete")
+
+    def _on_start_radio(self, action, param):
+        pid = getattr(self, "_audio_playlist_id", None) or self.playlist_id
+        if not pid:
+            return
+        radio_id = pid if pid.startswith("RDAMPL") else f"RDAMPL{pid}"
+        self.player.start_radio(playlist_id=radio_id)
+        self._show_toast("Starting radio...")
 
     def _on_download_all(self, action, param):
         all_tracks = (

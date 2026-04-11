@@ -84,6 +84,11 @@ class SearchPage(Adw.Bin):
         # Load saved chart country preference
         self._charts_country = self._load_charts_country()
 
+        # Explore load state
+        self._explore_loaded = False
+        self._explore_loading = False
+        self._explore_retry_count = 0
+
         # Load explore data
         self.load_explore_data()
 
@@ -105,8 +110,10 @@ class SearchPage(Adw.Bin):
         # Update song row images
         self._propagate_compact(self.results_box, compact)
 
-        # Load explore data
-        self.load_explore_data()
+        # Only fetch if explore hasn't loaded yet; otherwise just keep
+        # the existing content (spacing was updated above).
+        if not self._explore_loaded:
+            self.load_explore_data()
 
     def _propagate_compact(self, widget, compact):
         """Recursively find AsyncPicture children and set compact mode."""
@@ -132,13 +139,61 @@ class SearchPage(Adw.Bin):
 
         return False
 
-    def load_explore_data(self):
+    def _retry_explore_fetch(self):
+        if not self._explore_loaded:
+            self.load_explore_data(force=True)
+        return False
+
+    def _show_explore_retry_placeholder(self):
+        child = self.explore_box.get_first_child()
+        while child:
+            next_child = child.get_next_sibling()
+            self.explore_box.remove(child)
+            child = next_child
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_valign(Gtk.Align.CENTER)
+        box.set_halign(Gtk.Align.CENTER)
+        box.set_vexpand(True)
+
+        icon = Gtk.Image.new_from_icon_name("dialog-warning-symbolic")
+        icon.set_pixel_size(48)
+        icon.add_css_class("dim-label")
+        box.append(icon)
+
+        label = Gtk.Label(label="Couldn't load Explore")
+        label.add_css_class("title-3")
+        box.append(label)
+
+        retry_btn = Gtk.Button(label="Retry")
+        retry_btn.add_css_class("pill")
+        retry_btn.add_css_class("suggested-action")
+        retry_btn.set_halign(Gtk.Align.CENTER)
+        retry_btn.connect(
+            "clicked",
+            lambda _b: (
+                setattr(self, "_explore_retry_count", 0),
+                self.load_explore_data(force=True),
+            ),
+        )
+        box.append(retry_btn)
+
+        self.explore_box.append(box)
+
+    def load_explore_data(self, force=False):
+        if self._explore_loading:
+            return
+        if self._explore_loaded and not force:
+            return
+        if force:
+            self._explore_loaded = False
+        self._explore_loading = True
         thread = threading.Thread(target=self._fetch_explore)
         thread.daemon = True
         thread.start()
 
     def refresh_explore(self):
-        self.load_explore_data()
+        self.load_explore_data(force=True)
 
     def _fetch_explore(self):
         from ui.utils import is_online
@@ -163,10 +218,12 @@ class SearchPage(Adw.Bin):
             GObject.idle_add(self.update_explore_ui, None)
 
     def update_explore_ui(self, data):
+        self._explore_loading = False
         if not data:
             # Check if offline
             from ui.utils import is_online
-            if not is_online():
+            online = is_online()
+            if not online:
                 child = self.explore_box.get_first_child()
                 while child:
                     next_child = child.get_next_sibling()
@@ -188,6 +245,15 @@ class SearchPage(Adw.Bin):
                 offline_sub.set_justify(Gtk.Justification.CENTER)
                 offline_box.append(offline_sub)
                 self.explore_box.append(offline_box)
+                return
+            # Online but fetch failed/empty: retry a few times with backoff,
+            # then fall back to a manual retry placeholder.
+            if self._explore_retry_count < 3:
+                self._explore_retry_count += 1
+                delay = 1500 * self._explore_retry_count
+                GLib.timeout_add(delay, self._retry_explore_fetch)
+            else:
+                self._show_explore_retry_placeholder()
             return
 
         # Clear existing explore content
@@ -196,6 +262,9 @@ class SearchPage(Adw.Bin):
             next_child = child.get_next_sibling()
             self.explore_box.remove(child)
             child = next_child
+
+        self._explore_loaded = True
+        self._explore_retry_count = 0
 
         # Separated categories (Moods and Genres)
         if "separated_categories" in data:

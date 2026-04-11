@@ -79,6 +79,22 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="2026-11-04.0" date="2026-11-04">
+      <description>
+        <p>Discord Rich Presence support and a stack of stability fixes around fast skipping, the queue, and the explore page.</p>
+        <ul>
+          <li>Discord Rich Presence: now playing track with album art, small Mixtapes icon, and live progress bar (cross-platform: Linux, macOS, Windows)</li>
+          <li>Start Radio from any playlist or album via the more menu</li>
+          <li>Fast-skip stability: spamming next no longer wraps the queue back to the first track</li>
+          <li>Fix: clicking a song in a playlist could silently play the first track when the click target wasn't found in the queue</li>
+          <li>Fix: removing a song from the queue now updates the queue panel immediately instead of waiting for the next track change</li>
+          <li>Fix: rare segfault when switching songs from the queue panel</li>
+          <li>Fix: volume could snap back to 100% on track change due to a spurious GStreamer notify-volume during pipeline rebuilds</li>
+          <li>Explore tab now retries automatically on transient network errors at startup and shows a manual retry button if it still fails</li>
+          <li>Expanded player carousel no longer drags playback back to the first track when songs are skipped rapidly</li>
+        </ul>
+      </description>
+    </release>
     <release version="2026-05-04.0" date="2026-05-04">
       <description>
         <p>This update adds the ability to download songs as local files with all the metadata and offline listening, as well as Charts in the Explore page.</p>

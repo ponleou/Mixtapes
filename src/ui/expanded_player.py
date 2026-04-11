@@ -379,6 +379,13 @@ class ExpandedPlayer(Gtk.Box):
             return
 
         self._ignore_page_change = True
+        # Re-armable token: only the most recent sync's timer is allowed to
+        # clear the flag. Otherwise rapid syncs (e.g. spamming next) leave
+        # earlier 200ms timers in flight; the first one fires and clears the
+        # flag while later syncs are still mutating the carousel, letting a
+        # spurious position-changed leak through and snap playback to 0.
+        self._carousel_sync_token = getattr(self, "_carousel_sync_token", 0) + 1
+        token = self._carousel_sync_token
 
         # Adjust covers array to match exact queue length
         while len(self.covers) > queue_len:
@@ -403,7 +410,7 @@ class ExpandedPlayer(Gtk.Box):
         if 0 <= idx < len(self.covers):
             self.carousel.scroll_to(self.covers[idx], animate=False)
 
-        GLib.timeout_add(200, self._allow_page_change)
+        GLib.timeout_add(200, self._allow_page_change, token)
 
     def _lazy_load_covers_around(self, center_idx):
         if center_idx == getattr(self, "_last_lazy_idx", -1):
@@ -436,7 +443,10 @@ class ExpandedPlayer(Gtk.Box):
                 if cover.url is not None:
                     cover.load_url(None)
 
-    def _allow_page_change(self):
+    def _allow_page_change(self, token=None):
+        # Only the latest sync's timer may clear the flag.
+        if token is not None and token != getattr(self, "_carousel_sync_token", 0):
+            return False
         self._ignore_page_change = False
         return False
 
@@ -669,6 +679,13 @@ class ExpandedPlayer(Gtk.Box):
                     # Guard: don't override if the player is already loading a different track
                     # (e.g. carousel settling after a programmatic queue change)
                     if self.player._is_loading:
+                        self._ignore_page_change = False
+                        return False
+                    # Real user swipes only ever move one page at a time.
+                    # Anything larger means the carousel is settling after a
+                    # programmatic queue resize and we should not act on it.
+                    cur = self.player.current_queue_index
+                    if cur >= 0 and abs(jump_idx - cur) > 1:
                         self._ignore_page_change = False
                         return False
                     self.player.current_queue_index = jump_idx

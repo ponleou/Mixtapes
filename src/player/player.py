@@ -30,6 +30,8 @@ else:
     except ImportError:
         pass
 
+from player.discord_rpc import DiscordRPCAdapter
+
 
 class Player(GObject.Object):
     __gsignals__ = {
@@ -94,6 +96,8 @@ class Player(GObject.Object):
         self.player.connect("notify::volume", self._on_external_volume_change)
         self.player.connect("notify::mute", self._on_external_mute_change)
         self._internal_volume_change = False
+        self._user_volume = self.get_volume()
+        self._track_started_at = 0.0
 
         self.current_video_id = None
 
@@ -153,6 +157,26 @@ class Player(GObject.Object):
             except Exception as e:
                 print(f"SMTC init failed: {e}")
                 self.smtc = None
+
+        # Discord Rich Presence (cross-platform; no-op if pypresence missing
+        # or Discord not running).
+        try:
+            self.discord_rpc = DiscordRPCAdapter(self)
+            self.connect("state-changed", self._on_discord_state_changed)
+            self.connect("metadata-changed", self._on_discord_metadata_changed)
+        except Exception as e:
+            print(f"Discord RPC init failed: {e}")
+            self.discord_rpc = None
+
+    def _on_discord_state_changed(self, obj, state):
+        if getattr(self, "discord_rpc", None):
+            self.discord_rpc.update()
+
+    def _on_discord_metadata_changed(
+        self, obj, title, artist, thumb, video_id, like_status
+    ):
+        if getattr(self, "discord_rpc", None):
+            self.discord_rpc.update()
 
     def _on_mpris_state_changed(self, obj, state):
         print(f"DEBUG-MPRIS-STATE-START: state={state}")
@@ -319,6 +343,8 @@ class Player(GObject.Object):
             if pop in self.original_queue:
                 self.original_queue.remove(pop)
 
+            self.emit("state-changed", "queue-updated")
+
     def move_queue_item(self, old_index, new_index):
         if 0 <= old_index < len(self.queue) and 0 <= new_index < len(self.queue):
             # Adjust index when moving down to insert before target, accounting for the list shift from popping.
@@ -480,8 +506,10 @@ class Player(GObject.Object):
             thumb = track.get("thumb")
             like_status = str(track.get("likeStatus") or "INDIFFERENT")
 
+            import traceback as _tb
+            caller_stack = "".join(_tb.format_stack(limit=6)[:-1])
             print(
-                f"DEBUG-PLAY: index={self.current_queue_index} video_id={video_id}",
+                f"DEBUG-PLAY: index={self.current_queue_index} video_id={video_id} queue_len={len(self.queue)}\nCALLER:\n{caller_stack}",
                 flush=True,
             )
 
@@ -989,6 +1017,26 @@ class Player(GObject.Object):
     def on_message(self, bus, message):
         t = message.type
         if t == Gst.MessageType.EOS:
+            # Ignore EOS that arrives mid-load. When the user skips rapidly,
+            # GStreamer can emit EOS for the *previous* stream as it tears
+            # down — acting on it would queue an extra next() and over-advance
+            # the queue, eventually wrapping to 0 under repeat=all.
+            if self._is_loading:
+                print("EOS during load — ignoring (stale stream).", flush=True)
+                return
+            # Bus messages are async — a stale EOS from the previous pipeline
+            # can land *after* the new track has already reached PLAYING.
+            # Reject EOS that arrives within the first second of a new track.
+            import time as _time
+            if (
+                self._track_started_at
+                and _time.time() - self._track_started_at < 1.0
+            ):
+                print(
+                    "EOS within 1s of track start — ignoring (stale stream).",
+                    flush=True,
+                )
+                return
             print("EOS Reached. Advancing to next track.", flush=True)
             self.stop()
             if self.repeat_mode == "track":
@@ -1028,7 +1076,20 @@ class Player(GObject.Object):
             if message.src == self.player:
                 old, new, pending = message.parse_state_changed()
                 if new == Gst.State.PLAYING:
+                    if abs(self.get_volume() - self._user_volume) > 0.001:
+                        linear = GstAudio.StreamVolume.convert_volume(
+                            GstAudio.StreamVolumeFormat.CUBIC,
+                            GstAudio.StreamVolumeFormat.LINEAR,
+                            self._user_volume,
+                        )
+                        self._internal_volume_change = True
+                        self.player.set_property("volume", linear)
+                        self._internal_volume_change = False
                     self._is_loading = False
+                    import time as _time
+                    self._track_started_at = _time.time()
+                    if getattr(self, "discord_rpc", None):
+                        self.discord_rpc.update()
                 self._update_logical_state()
         # BUFFERING messages are intentionally ignored - playbin manages
         # stream buffering internally and briefly pauses the pipeline,
@@ -1167,6 +1228,8 @@ class Player(GObject.Object):
                     self.duration = new_dur
                     if hasattr(self, "mpris_events"):
                         self.mpris_events.on_title()  # Syncs 'mpris:length'
+                    if getattr(self, "discord_rpc", None):
+                        self.discord_rpc.update()
 
             # 3. Update Position
             success_pos, pos_nanos = self.player.query_position(Gst.Format.TIME)
@@ -1217,6 +1280,7 @@ class Player(GObject.Object):
 
     def set_volume(self, value):
         """Set volume from cubic (perceptual) scale 0.0-1.0."""
+        self._user_volume = float(value)
         linear = GstAudio.StreamVolume.convert_volume(
             GstAudio.StreamVolumeFormat.CUBIC,
             GstAudio.StreamVolumeFormat.LINEAR,
@@ -1242,6 +1306,12 @@ class Player(GObject.Object):
     def _on_external_volume_change(self, element, param):
         """Called when volume changes externally (system mixer)."""
         if self._internal_volume_change:
+            return
+        # During track loads, playbin can rebuild its audio sink and briefly
+        # report the new sink's default volume. Ignore those spurious notifies
+        # so the UI doesn't snap to 100%; the real value is restored once the
+        # pipeline reaches PLAYING (see on_message).
+        if self._is_loading:
             return
         GLib.idle_add(self.emit, "volume-changed", self.get_volume(), self.get_mute())
 

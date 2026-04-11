@@ -506,14 +506,18 @@ class QueuePanel(Gtk.Box):
 
         state = args[0] if len(args) == 1 else None
 
-        # If queue length changed OR structural update requested, we MUST repopulate
+        # If queue length changed OR structural update requested, we MUST repopulate.
+        # Defer to idle: this signal can fire synchronously from inside a row's
+        # click gesture handler (via play_queue_index → stop → state-changed),
+        # and splicing the ListStore mid-gesture frees the GtkListItem the
+        # gesture is still unwinding from, causing a segfault.
         if state == "queue-updated" or self.store.get_n_items() != len(
             self.player.queue
         ):
-            self._populate()
+            GLib.idle_add(self._populate)
         else:
             # Otherwise, just update indicators (very efficient!)
-            self._update_item_states()
+            GLib.idle_add(self._update_item_states)
 
     def _update_item_states(self):
         current_idx = self.player.current_queue_index

@@ -266,14 +266,14 @@ Without a `browser.json` file, the app falls back to the unauthenticated API, wh
 | ☑️ | **Responsive Design** | Mobile-friendly layout with adaptive UI |
 | ✅️ | **MPRIS Support** | Control playback from system media controls |
 | ✅️ | **Download Support** | Download tracks for offline playback, even as local files |
-| ✅️ | **Radio / Mixes** | Start a radio station from a song or artist |
+| ✅️ | **Radio / Mixes** | Start a radio station from a song, album, playlist, or artist |
 | ✅️ | **Dedicated Data Directory** | Cookies, cache, etc. in a dedicated directory |
 | ✅️ | **Background Playback** | Music keeps playing when the window is closed |
 | ✅️ | **AUR** | Available as `mixtapes-git` |
 | ☑️ | **Flatpak** | ✅️ Flatpak build<br>☑️ Flathub release (depends on app icon)<br>🔜 App icon |
 | ☑️ | **Settings** | Configure app preferences (theme, audio quality, etc.). Not much to configure yet. |
 | 🔜 | **Cover Art Tint** | Tint Libadwaita to match cover art, kinda like Material You |
-| 🔜 | **Discord RPC** | Show your current track on Discord |
+| ☑️️ | **Discord RPC** | Show your current track on Discord<br>✅️ Linux<br>☑️ Windows (untested) |
 | 🔜 | **Lyrics** | Synchronized lyrics, maybe using BetterLyrics API |
 | ✅️ | **Windows** | ✅️ GTK4/Libadwaita via MSYS2<br>✅️ GStreamer playback<br>✅️ SMTC media controls<br>✅️ System tray<br>✅️ Installer<br>✅️ Login helper (Edge WebView2) |
 | ❎️ | **macOS** | Unlikely that I will get hands on a Mac anytime soon, so for now won't happen. Technically it's possible to build it for macOS, but I don't have a Mac to test it on. |
