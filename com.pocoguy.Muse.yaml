@@ -20,8 +20,11 @@ finish-args:
   - --share=network
   - --persist=.
   - --device=dri
+  - --device=input
   - --socket=session-bus
   - --filesystem=xdg-music
+  - --filesystem=xdg-run/app/com.discordapp.Discord
+  - --filesystem=xdg-run/discord-ipc-0
 modules:
   - name: nodejs-runtime
     buildsystem: simple
