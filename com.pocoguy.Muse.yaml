@@ -20,7 +20,6 @@ finish-args:
   - --share=network
   - --persist=.
   - --device=dri
-  - --device=input
   - --socket=session-bus
   - --filesystem=xdg-music
   - --filesystem=xdg-run/app/com.discordapp.Discord
