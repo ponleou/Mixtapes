@@ -704,6 +704,15 @@ class SearchPage(Adw.Bin):
                     elif author:
                         subtitle = str(author)
 
+                # Append album name if available
+                album_data = item.get("album")
+                if album_data:
+                    album_name = album_data.get("name", "") if isinstance(album_data, dict) else str(album_data)
+                    if album_name and subtitle:
+                        subtitle += f" • {album_name}"
+                    elif album_name:
+                        subtitle = album_name
+
                 # Check for Album type
                 if "type" in item and subtitle:
                     subtitle += f" • {item['type']}"
@@ -786,6 +795,35 @@ class SearchPage(Adw.Bin):
                         args=(album_id, item_type, subtitle_label, self.client),
                         daemon=True,
                     ).start()
+
+            # Fetch missing album name in background for songs
+            vid_for_album = item.get("videoId")
+            has_album = item.get("album")
+            if vid_for_album and not has_album and item.get("resultType") in ("song", "video", None):
+                def _fetch_album(vid, itm, lbl, client):
+                    try:
+                        wp = client.get_watch_playlist(video_id=vid, limit=1)
+                        wp_tracks = wp.get("tracks", [])
+                        if wp_tracks and wp_tracks[0].get("album"):
+                            album = wp_tracks[0]["album"]
+                            album_name = album.get("name", "") if isinstance(album, dict) else str(album)
+                            if album_name:
+                                itm["album"] = album
+                                def _update_label():
+                                    cur = lbl.get_label()
+                                    if cur:
+                                        lbl.set_label(f"{cur} • {album_name}")
+                                    else:
+                                        lbl.set_label(album_name)
+                                    lbl.set_visible(True)
+                                GLib.idle_add(_update_label)
+                    except Exception:
+                        pass
+                threading.Thread(
+                    target=_fetch_album,
+                    args=(vid_for_album, item, subtitle_label, self.client),
+                    daemon=True,
+                ).start()
 
             title_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             title_box.append(title_label)
@@ -1041,14 +1079,15 @@ class SearchPage(Adw.Bin):
                                 elif "artist" in s_data:
                                     s_artist = s_data["artist"]
 
-                                queue_tracks.append(
-                                    {
-                                        "videoId": s_data["videoId"],
-                                        "title": s_title,
-                                        "artist": s_artist,
-                                        "thumb": s_thumb,
-                                    }
-                                )
+                                qt = {
+                                    "videoId": s_data["videoId"],
+                                    "title": s_title,
+                                    "artist": s_artist,
+                                    "thumb": s_thumb,
+                                }
+                                if s_data.get("album"):
+                                    qt["album"] = s_data["album"]
+                                queue_tracks.append(qt)
 
                                 if s_data.get("videoId") == data.get("videoId"):
                                     start_index = idx

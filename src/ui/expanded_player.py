@@ -152,6 +152,10 @@ class ExpandedPlayer(Gtk.Box):
         a_dl.connect("activate", self._on_download)
         self.ep_action_group.add_action(a_dl)
 
+        a_refresh = Gio.SimpleAction.new("refresh_metadata", None)
+        a_refresh.connect("activate", self._on_refresh_metadata)
+        self.ep_action_group.add_action(a_refresh)
+
         meta_row.append(text_box)
         meta_row.append(self.like_btn)
         main_box.append(meta_row)
@@ -598,6 +602,10 @@ class ExpandedPlayer(Gtk.Box):
         if vid and _online and not self.player.download_manager.is_downloaded(vid):
             action_section.append("Download", "ep.download")
 
+        # Refresh metadata (online only)
+        if vid and _online:
+            action_section.append("Refresh Metadata", "ep.refresh_metadata")
+
         if action_section.get_n_items() > 0:
             self.more_menu_model.append_section(None, action_section)
 
@@ -640,6 +648,47 @@ class ExpandedPlayer(Gtk.Box):
                 f"https://music.youtube.com/watch?v={vid}"
             )
             self._show_toast("Link copied")
+
+    def _on_refresh_metadata(self, action, param):
+        vid = self.player.current_video_id
+        idx = self.player.current_queue_index
+        if not vid or idx < 0 or idx >= len(self.player.queue):
+            return
+        self._show_toast("Refreshing metadata...")
+
+        def _fetch():
+            try:
+                wp = self.player.client.get_watch_playlist(video_id=vid, limit=1)
+                wp_tracks = wp.get("tracks", [])
+                if wp_tracks:
+                    fresh = wp_tracks[0]
+                    track = self.player.queue[idx]
+                    if track.get("videoId") != vid:
+                        return
+                    if fresh.get("title"):
+                        track["title"] = fresh["title"]
+                    if fresh.get("artists"):
+                        track["artists"] = fresh["artists"]
+                        track["artist"] = ", ".join(
+                            a.get("name", "") for a in fresh["artists"] if a
+                        )
+                    if fresh.get("album"):
+                        track["album"] = fresh["album"]
+                    if fresh.get("thumbnail"):
+                        thumbs = fresh["thumbnail"]
+                        if isinstance(thumbs, list) and thumbs:
+                            track["thumb"] = thumbs[-1].get("url", "")
+                            track["thumbnails"] = thumbs
+                    if getattr(self.player, "discord_rpc", None):
+                        self.player.discord_rpc.update()
+                    GLib.idle_add(self._show_toast, "Metadata refreshed")
+                else:
+                    GLib.idle_add(self._show_toast, "No metadata found")
+            except Exception as e:
+                print(f"Refresh metadata error: {e}")
+                GLib.idle_add(self._show_toast, "Failed to refresh metadata")
+
+        threading.Thread(target=_fetch, daemon=True).start()
 
     def _show_toast(self, message):
         root = self.get_root()

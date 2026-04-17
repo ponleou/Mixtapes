@@ -877,6 +877,20 @@ class Player(GObject.Object):
                         track["artist"] = final_artist
                         track["thumb"] = final_thumb
 
+                        # Fetch album if missing (needed for Discord RPC)
+                        if not track.get("album"):
+                            try:
+                                wp = self.client.get_watch_playlist(
+                                    video_id=video_id, limit=1
+                                )
+                                wp_tracks = wp.get("tracks", [])
+                                if wp_tracks and wp_tracks[0].get("album"):
+                                    track["album"] = wp_tracks[0]["album"]
+                                    if getattr(self, "discord_rpc", None):
+                                        self.discord_rpc.update()
+                            except Exception:
+                                pass
+
                 # Check generation again before playing
                 if generation != self.load_generation:
                     print(

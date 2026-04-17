@@ -393,6 +393,59 @@ class SongRowWidget(Gtk.Box):
         if action_section.get_n_items() > 0:
             menu_model.append_section(None, action_section)
 
+        # Refresh metadata
+        if item.video_id and _online:
+            def refresh_metadata_action(action, param):
+                vid = item.video_id
+                if not vid:
+                    return
+                self._show_toast("Refreshing metadata...")
+
+                def _fetch():
+                    try:
+                        wp = self.client.get_watch_playlist(video_id=vid, limit=1)
+                        wp_tracks = wp.get("tracks", [])
+                        if wp_tracks:
+                            fresh = wp_tracks[0]
+                            td = item.track_data
+                            if fresh.get("title"):
+                                td["title"] = fresh["title"]
+                            if fresh.get("artists"):
+                                td["artists"] = fresh["artists"]
+                                td["artist"] = ", ".join(
+                                    a.get("name", "") for a in fresh["artists"] if a
+                                )
+                            if fresh.get("album"):
+                                td["album"] = fresh["album"]
+                            if fresh.get("thumbnail"):
+                                thumbs = fresh["thumbnail"]
+                                if isinstance(thumbs, list) and thumbs:
+                                    td["thumb"] = thumbs[-1].get("url", "")
+                                    td["thumbnails"] = thumbs
+                            # Update queue track if it matches
+                            for t in self.player.queue:
+                                if t.get("videoId") == vid:
+                                    t.update(td)
+                                    break
+                            if getattr(self.player, "discord_rpc", None):
+                                self.player.discord_rpc.update()
+                            GLib.idle_add(self._show_toast, "Metadata refreshed")
+                        else:
+                            GLib.idle_add(self._show_toast, "No metadata found")
+                    except Exception as e:
+                        print(f"Refresh metadata error: {e}")
+                        GLib.idle_add(self._show_toast, "Failed to refresh metadata")
+
+                threading.Thread(target=_fetch, daemon=True).start()
+
+            a_refresh = Gio.SimpleAction.new("refresh_metadata", None)
+            a_refresh.connect("activate", refresh_metadata_action)
+            group.add_action(a_refresh)
+            action_section.append("Refresh Metadata", "row.refresh_metadata")
+
+        if action_section.get_n_items() > 0:
+            menu_model.append_section(None, action_section)
+
         # Clipboard section
         clip_section = Gio.Menu()
         if item.video_id and _online:

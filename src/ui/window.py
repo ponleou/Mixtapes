@@ -845,6 +845,78 @@ class MainWindow(Adw.ApplicationWindow):
         offline_row.connect("notify::active", on_offline_toggled)
         app_group.add(offline_row)
 
+        # Discord RPC group
+        from player.discord_rpc import (
+            STATUS_DISPLAY_TYPES,
+            STATUS_DISPLAY_DEFAULT,
+        )
+
+        rpc_group = Adw.PreferencesGroup()
+        rpc_group.set_title("Discord Rich Presence")
+        page.add(rpc_group)
+
+        rpc_adapter = getattr(self.player, "discord_rpc", None)
+
+        # Connection status
+        status_text = rpc_adapter.status if rpc_adapter else "Unavailable"
+        status_row = Adw.ActionRow()
+        status_row.set_title("Connection Status")
+        status_label = Gtk.Label(label=status_text)
+        status_label.set_valign(Gtk.Align.CENTER)
+        status_label.add_css_class("dim-label")
+        status_row.add_suffix(status_label)
+        rpc_group.add(status_row)
+
+        # Enable/disable toggle
+        rpc_enabled_row = Adw.SwitchRow()
+        rpc_enabled_row.set_title("Enable Discord RPC")
+        rpc_enabled_row.set_subtitle(
+            "Show what you're listening to on Discord"
+        )
+        rpc_enabled_row.set_active(_prefs.get("discord_rpc_enabled", True))
+
+        # Status display type
+        display_row = Adw.ComboRow()
+        display_row.set_title("Status Display")
+        display_row.set_subtitle("What appears in the status line under your name")
+        display_keys = list(STATUS_DISPLAY_TYPES.keys())
+        display_labels = ["App Name (Mixtapes)", "Artist", "Song Title"]
+        display_row.set_model(Gtk.StringList.new(display_labels))
+        display_row.set_sensitive(rpc_enabled_row.get_active())
+
+        current_display = _prefs.get("discord_rpc_status_display", STATUS_DISPLAY_DEFAULT)
+        for i, key in enumerate(display_keys):
+            if key == current_display:
+                display_row.set_selected(i)
+                break
+
+        def on_rpc_toggled(switch, pspec):
+            enabled = switch.get_active()
+            _prefs["discord_rpc_enabled"] = enabled
+            os.makedirs(os.path.dirname(_prefs_path), exist_ok=True)
+            with open(_prefs_path, "w") as f:
+                _json.dump(_prefs, f)
+            display_row.set_sensitive(enabled)
+            if rpc_adapter:
+                rpc_adapter.set_enabled(enabled)
+                status_label.set_label(rpc_adapter.status)
+
+        rpc_enabled_row.connect("notify::active", on_rpc_toggled)
+        rpc_group.add(rpc_enabled_row)
+
+        def on_display_changed(row, pspec):
+            idx = row.get_selected()
+            if 0 <= idx < len(display_keys):
+                _prefs["discord_rpc_status_display"] = display_keys[idx]
+                os.makedirs(os.path.dirname(_prefs_path), exist_ok=True)
+                with open(_prefs_path, "w") as f:
+                    _json.dump(_prefs, f)
+                if rpc_adapter and rpc_adapter._enabled:
+                    rpc_adapter.update()
+
+        display_row.connect("notify::selected", on_display_changed)
+        rpc_group.add(display_row)
+
         from api.client import MusicClient
 
         is_authed = MusicClient().is_authenticated()
