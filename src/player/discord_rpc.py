@@ -13,6 +13,34 @@ DISCORD_APP_ID = "1492500060087255231"
 
 RECONNECT_BACKOFF = [5, 15, 30, 60, 120]
 
+STATUS_DISPLAY_TYPES = {
+    "app_name": 0,
+    "artist": 1,
+    "song_title": 2,
+}
+STATUS_DISPLAY_DEFAULT = "artist"
+
+
+def _get_prefs():
+    from gi.repository import GLib
+    path = os.path.join(GLib.get_user_data_dir(), "muse", "prefs.json")
+    try:
+        if os.path.exists(path):
+            with open(path) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def get_rpc_enabled():
+    return _get_prefs().get("discord_rpc_enabled", True)
+
+
+def get_status_display_type():
+    return _get_prefs().get("discord_rpc_status_display", STATUS_DISPLAY_DEFAULT)
+
+
 OP_HANDSHAKE = 0
 OP_FRAME = 1
 OP_CLOSE = 2
@@ -67,16 +95,36 @@ class DiscordRPCAdapter:
         self._queue = queue.Queue()
         self._connect_attempt = 0
         self._pid = os.getpid()
+        self.status = "Disconnected"
+        self._enabled = get_rpc_enabled()
 
-        self._worker = threading.Thread(target=self._run, daemon=True)
-        self._worker.start()
-        self._queue.put(("connect", None))
+        if self._enabled:
+            self._worker = threading.Thread(target=self._run, daemon=True)
+            self._worker.start()
+            self._queue.put(("connect", None))
+        else:
+            self._worker = None
+            self.status = "Disabled"
 
     # ── Public API ────────────────────────────────────────────────────────
 
     def update(self):
-        if not self._stopping:
+        if not self._stopping and self._enabled:
             self._queue.put(("update", None))
+
+    def set_enabled(self, enabled):
+        self._enabled = enabled
+        if enabled and self._worker is None:
+            self._stopping = False
+            self._queue = queue.Queue()
+            self.status = "Disconnected"
+            self._worker = threading.Thread(target=self._run, daemon=True)
+            self._worker.start()
+            self._queue.put(("connect", None))
+        elif not enabled and self._worker is not None:
+            self.stop()
+            self._worker = None
+            self.status = "Disabled"
 
     def stop(self):
         self._stopping = True
@@ -171,6 +219,7 @@ class DiscordRPCAdapter:
                 if op is None:
                     raise OSError("no handshake response")
                 self.connected = True
+                self.status = "Connected"
                 self._connect_attempt = 0
                 self._do_update()
                 return
@@ -179,6 +228,7 @@ class DiscordRPCAdapter:
                 self._teardown_transport()
                 continue
         print("[DiscordRPC] no Discord IPC endpoint reachable")
+        self.status = "Disconnected"
         self._schedule_reconnect()
 
     def _schedule_reconnect(self):
@@ -276,6 +326,8 @@ class DiscordRPCAdapter:
                 pass
         self.transport = None
         self.connected = False
+        if self._enabled:
+            self.status = "Disconnected"
 
     # ── Payload ───────────────────────────────────────────────────────────
 
@@ -303,12 +355,14 @@ class DiscordRPCAdapter:
         if len(state_text) < 2:
             state_text = state_text + " "
 
+        display_key = get_status_display_type()
+        display_type = STATUS_DISPLAY_TYPES.get(display_key, 1)
+
         activity = {
             "details": details,
             "state": state_text,
-            "type": 2,  # LISTENING — only type Vesktop's arRPC reliably
-                        # forwards for non-detectable apps.
-            "display_status_type": 1, # uses "state" for status display
+            "type": 2,
+            "status_display_type": display_type,
         }
 
         small_image = (
