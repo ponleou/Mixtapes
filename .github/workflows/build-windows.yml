@@ -18,23 +18,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate app icon (early, needed by other steps)
+      - name: Generate app icon PNG (early, needed by other steps)
         shell: pwsh
         run: |
-          $svg = "assets/icons/hicolor/scalable/actions/compass2-symbolic.svg"
-          if (Test-Path "build-dir/files/share/icons/hicolor/scalable/apps/com.pocoguy.Muse.svg") {
-            $svg = "build-dir/files/share/icons/hicolor/scalable/apps/com.pocoguy.Muse.svg"
-          }
+          $svg = "assets/icons/hicolor/scalable/apps/com.pocoguy.Muse.svg"
           magick $svg -background none -resize 256x256 windows/mixtapes_256.png
-          magick windows/mixtapes_256.png `
-            "(" -clone 0 -resize 16x16 ")" `
-            "(" -clone 0 -resize 32x32 ")" `
-            "(" -clone 0 -resize 48x48 ")" `
-            "(" -clone 0 -resize 64x64 ")" `
-            "(" -clone 0 -resize 128x128 ")" `
-            "(" -clone 0 -resize 256x256 ")" `
-            -delete 0 windows/mixtapes.ico
-          Write-Host "Icon generated:"
+          Write-Host "Icon PNG generated from $svg"
+          Write-Host "ICO already committed at windows/mixtapes.ico:"
           Get-ChildItem windows/mixtapes.ico
 
       - name: Build login helper (native Windows Python)

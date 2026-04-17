@@ -270,7 +270,7 @@ Without a `browser.json` file, the app falls back to the unauthenticated API, wh
 | ✅️ | **Dedicated Data Directory** | Cookies, cache, etc. in a dedicated directory |
 | ✅️ | **Background Playback** | Music keeps playing when the window is closed |
 | ✅️ | **AUR** | Available as `mixtapes-git` |
-| ☑️ | **Flatpak** | ✅️ Flatpak build<br>☑️ Flathub release (depends on app icon)<br>🔜 App icon |
+| ☑️ | **Flatpak** | ✅️ Flatpak build<br>🔜 Flathub release<br>✅️ App icon |
 | ☑️ | **Settings** | Configure app preferences (theme, audio quality, etc.). Not much to configure yet. |
 | 🔜 | **Cover Art Tint** | Tint Libadwaita to match cover art, kinda like Material You |
 | ✅️ | **Discord RPC** | Show your current track on Discord<br>✅️ Linux<br>✅️ Windows |
