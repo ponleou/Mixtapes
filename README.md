@@ -1,8 +1,5 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/omori-mixtape-dark.png" />
-  <source media="(prefers-color-scheme: light)" srcset="screenshots/omori-mixtape.png" />
-  <img align="left" height="150" src="screenshots/omori-mixtape.png" />
-</picture>
+
+<img align="left" height="150" src="assets/icons/hicolor/scalable/apps/com.pocoguy.Muse.svg" />
 
 # Mixtapes
 
@@ -300,6 +297,8 @@ Contributions are welcome! Feel free to open issues for bug reports or feature r
 <a href="https://github.com/m-obeid/Mixtapes/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=m-obeid/Mixtapes" width="600"/>
 </a>
+
+The app icon was sketched by [Jakub Steiner](https://gitlab.gnome.org/jimmac) and rendered by [gnoman](https://gitlab.gnome.org/gnoman).
 
 ## License
 
