@@ -6,7 +6,7 @@ import os
 
 gi.require_version("Gst", "1.0")
 gi.require_version("GstAudio", "1.0")
-from gi.repository import Gst, GstAudio, GObject, GLib, GdkPixbuf
+from gi.repository import Gst, GstAudio, GObject, GLib, GdkPixbuf, GLib
 import glob
 from yt_dlp import YoutubeDL
 from ui.utils import get_high_res_url, get_ytimg_fallbacks
@@ -59,6 +59,7 @@ class Player(GObject.Object):
 
     def __init__(self):
         super().__init__()
+        GLib.set_application_name("Mixtapes")
         Gst.init(None)
         self.client = MusicClient()
         self.player = Gst.ElementFactory.make("playbin", "player")
