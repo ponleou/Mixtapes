@@ -64,6 +64,7 @@ class MusicApp(Adw.Application):
 
     def do_startup(self):
         Adw.Application.do_startup(self)
+        self._apply_desktop_theme_preferences()
 
         # Prepend project icons to theme search path (for running from source)
         # Must be first so it takes priority over system-installed Flatpak icons
@@ -102,6 +103,56 @@ class MusicApp(Adw.Application):
         if not win:
             win = MainWindow(application=self)
         win.present()
+
+    def _apply_desktop_theme_preferences(self):
+        """Apply desktop GTK/libadwaita theme preferences on Linux."""
+        if sys.platform != "linux":
+            return
+
+        settings = Gtk.Settings.get_default()
+        if not settings:
+            return
+
+        theme_name = None
+        icon_theme_name = None
+        color_scheme = None
+
+        # GTK_THEME should win when set explicitly by the user.
+        gtk_theme_env = os.environ.get("GTK_THEME", "").strip()
+        if gtk_theme_env:
+            theme_name = gtk_theme_env.split(":", 1)[0].strip()
+
+        try:
+            interface_settings = Gio.Settings.new("org.gnome.desktop.interface")
+            if not theme_name:
+                theme_name = interface_settings.get_string("gtk-theme").strip() or None
+            icon_theme_name = interface_settings.get_string("icon-theme").strip() or None
+            color_scheme = interface_settings.get_string("color-scheme").strip() or None
+        except Exception as e:
+            print(f"Could not read desktop interface settings: {e}")
+
+        if theme_name:
+            try:
+                settings.set_property("gtk-theme-name", theme_name)
+                print(f"Using GTK theme: {theme_name}")
+            except Exception as e:
+                print(f"Could not apply GTK theme '{theme_name}': {e}")
+
+        if icon_theme_name:
+            try:
+                settings.set_property("gtk-icon-theme-name", icon_theme_name)
+            except Exception as e:
+                print(f"Could not apply icon theme '{icon_theme_name}': {e}")
+
+        style_manager = Adw.StyleManager.get_default()
+        if color_scheme == "prefer-dark":
+            style_manager.set_color_scheme(Adw.ColorScheme.PREFER_DARK)
+            settings.set_property("gtk-application-prefer-dark-theme", True)
+        elif color_scheme == "prefer-light":
+            style_manager.set_color_scheme(Adw.ColorScheme.PREFER_LIGHT)
+            settings.set_property("gtk-application-prefer-dark-theme", False)
+        else:
+            style_manager.set_color_scheme(Adw.ColorScheme.DEFAULT)
 
 
 def main():
