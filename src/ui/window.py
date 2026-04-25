@@ -1244,9 +1244,21 @@ class MainWindow(Adw.ApplicationWindow):
         if HAS_TRAY:
             self.connect("notify::visible", self._on_visibility_changed)
 
+    def _get_background_play_enabled(self):
+        import json as _json
+        path = os.path.join(GLib.get_user_data_dir(), "muse", "prefs.json")
+        try:
+            if os.path.exists(path):
+                with open(path) as f:
+                    return _json.load(f).get("background_play", True)
+        except Exception:
+            pass
+
+        return True
+
     def _on_close_request(self, window):
         """Hide window instead of quitting if there are songs in the queue."""
-        if self.player.queue and self.player.current_queue_index >= 0:
+        if self._get_background_play_enabled() and self.player.queue and self.player.current_queue_index >= 0:
             self.set_visible(False)
             return True  # Prevent default close
         if HAS_TRAY and hasattr(self, "_tray_icon"):
@@ -1384,6 +1396,20 @@ class MainWindow(Adw.ApplicationWindow):
 
         offline_row.connect("notify::active", on_offline_toggled)
         app_group.add(offline_row)
+
+        background_play_row = Adw.SwitchRow()
+        background_play_row.set_title("Background Playback")
+        background_play_row.set_subtitle("Allow music to keep playing when the window is closed")
+        background_play_row.set_active(_prefs.get("background_play", True))
+
+        def on_background_play_toggled(switch, pspec):
+            _prefs["background_play"] = switch.get_active() 
+            os.makedirs(os.path.dirname(_prefs_path), exist_ok=True)
+            with open(_prefs_path, "w") as f:
+                _json.dump(_prefs, f)
+        
+        background_play_row.connect("notify::active", on_background_play_toggled)
+        app_group.add(background_play_row)
 
         sidebar_right_row = Adw.SwitchRow()
         sidebar_right_row.set_title("Sidebar on the Right")
