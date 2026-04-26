@@ -1308,6 +1308,31 @@ class SearchPage(Adw.Bin):
         if nav_section.get_n_items() > 0:
             menu_model.append_section(None, nav_section)
 
+        # Queue
+        queue_section = Gio.Menu()
+
+        if "videoId" in data:
+            def play_next_action(action, param):
+                self.player.add_to_queue(dict(data), next=True)
+                self.get_root().add_toast("Playing next")
+
+            def add_to_queue_action(action, param):
+                self.player.add_to_queue(dict(data), next=False)
+                self.get_root().add_toast("Added to queue")
+            
+            a_pn = Gio.SimpleAction.new("play_next", None)
+            a_pn.connect("activate", play_next_action)
+            group.add_action(a_pn)
+            queue_section.append("Play Next", "row.play_next")
+
+            a_aq = Gio.SimpleAction.new("add_to_queue", None)
+            a_aq.connect("activate", add_to_queue_action)
+            group.add_action(a_aq)
+            queue_section.append("Add to Queue", "row.add_to_queue")
+
+        if queue_section.get_n_items() > 0:
+            menu_model.append_section(None, queue_section)
+
         # Actions
         action_section = Gio.Menu()
         action_section.append("Start Radio", "row.start_radio")
