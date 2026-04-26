@@ -1285,9 +1285,11 @@ class SearchPage(Adw.Bin):
             browse_id = data.get("browseId")
             if vid:
                 self.player.start_radio(video_id=vid)
+                self.get_root().add_toast("Starting radio...")
             elif browse_id:
                 # For artists/playlists, use the browse ID as playlist source
                 self.player.start_radio(playlist_id=browse_id)
+                self.get_root().add_toast("Starting radio...")
 
         action_radio = Gio.SimpleAction.new("start_radio", None)
         action_radio.connect("activate", start_radio_action)
