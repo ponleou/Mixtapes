@@ -133,11 +133,15 @@ def _save_and_close(window, cookie_string):
     }
 
     output = OUTPUT_PATH or get_default_output()
-    with open(output, "w") as f:
-        json.dump(headers, f)
-
-    print(f"Login successful! Headers saved to: {output}")
-    window.destroy()
+    try:
+        os.makedirs(os.path.dirname(output), exist_ok=True)
+        with open(output, "w") as f:
+            json.dump(headers, f)
+        print(f"Login successful! Headers saved to: {output}")
+    except Exception as e:
+        print(f"Failed to save headers to {output}: {e}")
+    finally:
+        window.destroy()
 
 
 def main():

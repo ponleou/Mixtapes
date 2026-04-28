@@ -39,6 +39,7 @@ def launch_login(on_complete):
         return
 
     output_path = get_login_output_path()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     # Remove stale file
     if os.path.exists(output_path):
         os.remove(output_path)
