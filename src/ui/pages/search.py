@@ -1184,6 +1184,96 @@ class SearchPage(Adw.Bin):
                     if hasattr(root, "open_artist"):
                         root.open_artist(data["browseId"], title)
 
+    
+    def _on_radio_action(self, data):
+        # if its a song or video, it has vid
+        vid = data.get("videoId")
+
+        if vid:
+            self.player.start_radio(video_id=vid)
+            self.get_root().add_toast("Starting radio...")
+            return
+
+        # if no vid, then it can be a single, album, playlist, or artist
+        #   if its in a search page, then the data can be identified by 'resultType' field
+        #   if its in the explore page, then the data can be identified by 'type' field
+        #   NOTE: some data in search page can have both 'resultType' and 'type', explore page will always only have 'type'
+        from_search_page = "resultType" in data
+        data_type = data.get("resultType") if from_search_page else data.get("type", None)
+
+        # in most cases, this shouldn't happen, but if it does, the toast will help identify a fix easier
+        if data_type == None:
+            self.get_root().add_toast("Radio unsupported")
+            print(f"[Search Radio] Failed to find item type: {data}")
+            return
+
+        # search page has album, playlist, and artist
+        #   album's "resultType" is "album"
+        #   playlist's "resultType" is "playlist"
+        #   artist's "resultType" is "artist"
+
+        # explore page has album and single
+        #   album's "type" field is "Album"
+        #   single's "type" field is "Single"
+
+        # NOTE: some data "artist" resultType have radioId field, some doesn't
+        # if not, we have to do fallback to searching artist from api
+        # searching is slow, so we use thread for this case
+
+        # breaking the search process below to avoid using threads when not necessary
+        use_thread = from_search_page and data_type == "artist" and "radioId" not in data
+        if use_thread:
+            def thread_func():
+                channel_id = data.get("browseId")
+                # NOTE: api call to get artist is slow, thats why we use thread
+                artist = self.client.get_artist(channel_id)
+                if "radioId" in artist:
+                    playlist_id = artist.get("radioId")
+                    self.player.start_radio(playlist_id=playlist_id)
+                    self.get_root().add_toast("Starting radio...")
+                    return
+                else:
+                    songs = artist.get("songs", {}).get("results", [])
+                    first_song = songs[0] if len(songs) > 0 else None
+                    first_song_id = first_song.get("videoId") if first_song != None else None
+
+                    if first_song_id != None:
+                        self.player.start_radio(video_id=first_song_id)
+                        self.get_root().add_toast("Starting radio...")
+                    else:
+                        self.get_root().add_toast("Radio unsupported")
+                        print(f"[Search Radio] {data_type} ({"search" if from_search_page else "explore"} page) item unprocessed or doesn't have supported playlist Id")
+                        print(f"[Search Radio] Item data: {data}")
+            
+            threading.Thread(target=thread_func, daemon=True).start()
+            return
+
+        playlist_id = None
+        # search page
+        if from_search_page:
+            if data_type == "album":
+                playlist_id = data.get("playlistId", None)
+                playlist_id = ("RDAMPL" + playlist_id) if not playlist_id == None else None
+            if data_type == "playlist":
+                playlist_id = data.get("browseId", None)
+                playlist_id = ("RDAMPL" + playlist_id) if not playlist_id == None else None
+            if data_type == "artist":
+                playlist_id = data.get("radioId", None)
+        # explore page
+        else:
+            if data_type == "Album" or data_type == "Single":
+                playlist_id = data.get("audioPlaylistId", None)
+                playlist_id = ("RDAMPL" + playlist_id) if not playlist_id == None else None
+
+        if playlist_id == None:
+            self.get_root().add_toast("Radio unsupported")
+            print(f"[Search Radio] {data_type} ({"search" if from_search_page else "explore"} page) item unprocessed or doesn't have supported playlist Id")
+            print(f"[Search Radio] Item data: {data}")
+        else:
+            self.player.start_radio(playlist_id=playlist_id)
+            self.get_root().add_toast("Starting radio...")
+        
+                        
     def on_row_right_click(self, gesture, n_press, x, y, row):
         if not hasattr(row, "item_data"):
             return
@@ -1280,17 +1370,8 @@ class SearchPage(Adw.Bin):
         group.add_action(action_add)
 
         # Start Radio
-        def start_radio_action(action, param):
-            vid = data.get("videoId")
-            browse_id = data.get("browseId")
-            if vid:
-                self.player.start_radio(video_id=vid)
-            elif browse_id:
-                # For artists/playlists, use the browse ID as playlist source
-                self.player.start_radio(playlist_id=browse_id)
-
         action_radio = Gio.SimpleAction.new("start_radio", None)
-        action_radio.connect("activate", start_radio_action)
+        action_radio.connect("activate", lambda a, p: self._on_radio_action(data))
         group.add_action(action_radio)
 
         # Build Menu Model
@@ -1307,6 +1388,31 @@ class SearchPage(Adw.Bin):
             nav_section.append("Go to Artist", "row.goto_artist")
         if nav_section.get_n_items() > 0:
             menu_model.append_section(None, nav_section)
+
+        # Queue
+        queue_section = Gio.Menu()
+
+        if "videoId" in data:
+            def play_next_action(action, param):
+                self.player.add_to_queue(dict(data), next=True)
+                self.get_root().add_toast("Playing next")
+
+            def add_to_queue_action(action, param):
+                self.player.add_to_queue(dict(data), next=False)
+                self.get_root().add_toast("Added to queue")
+            
+            a_pn = Gio.SimpleAction.new("play_next", None)
+            a_pn.connect("activate", play_next_action)
+            group.add_action(a_pn)
+            queue_section.append("Play Next", "row.play_next")
+
+            a_aq = Gio.SimpleAction.new("add_to_queue", None)
+            a_aq.connect("activate", add_to_queue_action)
+            group.add_action(a_aq)
+            queue_section.append("Add to Queue", "row.add_to_queue")
+
+        if queue_section.get_n_items() > 0:
+            menu_model.append_section(None, queue_section)
 
         # Actions
         action_section = Gio.Menu()
