@@ -464,7 +464,7 @@ class MusicClient:
                     return cached
             return []
         try:
-            playlists = self.api.get_library_playlists()
+            playlists = self.api.get_library_playlists(limit=None)
             self._library_playlists = playlists
             self._library_playlist_ids = {
                 p.get("playlistId") for p in playlists if p.get("playlistId")
