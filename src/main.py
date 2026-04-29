@@ -90,6 +90,11 @@ class MusicApp(Adw.Application):
         # Must be first so it takes priority over system-installed Flatpak icons
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         assets_icons = os.path.join(project_root, "assets", "icons")
+
+        # if it doesnt exist, check build root directory for pyinstaller support
+        if not os.path.isdir(assets_icons) and getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            assets_icons = os.path.join(sys._MEIPASS, "assets", "icons")
+
         if os.path.isdir(assets_icons):
             theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
             theme.set_search_path([assets_icons] + theme.get_search_path())
