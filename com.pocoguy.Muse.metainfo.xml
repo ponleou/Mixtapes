@@ -43,6 +43,10 @@
 
   <screenshots>
     <screenshot type="default">
+      <caption>Library page in grid view</caption>
+      <image>https://raw.githubusercontent.com/m-obeid/Mixtapes/main/screenshots/9.png</image>
+    </screenshot>
+    <screenshot type="default">
       <caption>Playlist page and open queue</caption>
       <image>https://raw.githubusercontent.com/m-obeid/Mixtapes/main/screenshots/1.png</image>
     </screenshot>
