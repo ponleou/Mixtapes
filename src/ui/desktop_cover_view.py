@@ -52,7 +52,7 @@ class DesktopCoverView(Adw.Bin):
         cover_frame.set_margin_end(48)
 
         clamp = Adw.Clamp()
-        clamp.set_maximum_size(500)
+        clamp.set_maximum_size(800)
         clamp.set_child(cover_frame)
 
         toolbar.set_content(clamp)
