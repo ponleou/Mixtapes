@@ -146,6 +146,18 @@ chmod +x start.sh
 ./start.sh
 ```
 
+Or build as binary with Pyinstaller:
+
+```bash
+git clone https://github.com/m-obeid/Mixtapes.git
+cd Mixtapes
+python3 -m venv .venv --system-site-packages
+source .venv/bin/activate
+pip install -r requirements.txt
+pyinstaller mixtapes.spec
+./dist/mixtapes/mixtapes
+```
+
 To update:
 
 ```bash
