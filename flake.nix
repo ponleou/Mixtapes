@@ -1,5 +1,5 @@
 {
-  description = "Python development setup with Nix for Muse project";
+  description = "Python development setup with Nix for Mixtapes project";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";

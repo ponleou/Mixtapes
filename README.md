@@ -64,6 +64,8 @@ A modern, Linux-first YouTube Music player built with GTK4 and Libadwaita.
 
 ### Flatpak (Recommended)
 
+This is the recommended way to install Mixtapes on Linux, as it avoids issues with your distribution's packaging.
+
 Add the automated repository and install:
 
 ```bash
@@ -97,7 +99,6 @@ A portable (no-install) ZIP is also available from [GitHub Actions](https://gith
 
 > [!NOTE]
 > The Windows build is experimental. Known limitations:
-> - No embedded WebKit login -- use the bundled Login Helper (`MixtapesLogin.exe`) or `ytmusicapi browser`
 > - SMTC (media controls) works but may show "Unknown app" without the installer
 > - Font rendering differs from Linux
 
@@ -106,6 +107,10 @@ A portable (no-install) ZIP is also available from [GitHub Actions](https://gith
 ```bash
 yay -S mixtapes-git
 ```
+
+> [!WARNING]
+> If you are using CachyOS, you will also need to reinstall webkitgtk-6.0 from the Arch 'extra' repo, not the CachyOS repo:
+> `sudo pacman -S extra/webkitgtk-6.0`
 
 ### Nix
 
