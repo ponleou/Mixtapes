@@ -290,6 +290,41 @@ def write_thumb_cache(url, data):
         pass
 
 
+def _async_image_teardown(widget):
+    """Drop pending fetches and release the paintable when an AsyncImage /
+    AsyncPicture is destroyed. Without this, thread-pool workers keep calling
+    GLib.idle_add(self._apply_pixbuf, …) after pop(), which recreates textures
+    and pins the whole page widget tree until every in-flight fetch finishes."""
+    widget._load_gen = getattr(widget, "_load_gen", 0) + 1
+    widget.url = None
+    widget._pending_fetch = None
+    try:
+        widget.set_paintable(None)
+    except Exception:
+        pass
+    hid = getattr(widget, "_map_handler_id", None)
+    if hid is not None:
+        try:
+            widget.disconnect(hid)
+        except Exception:
+            pass
+        widget._map_handler_id = None
+
+
+def _schedule_pixbuf_apply(widget, pixbuf, url):
+    """Apply a decoded pixbuf on the main thread, but no-op if the widget was
+    destroyed or rebound to a different URL since the fetch started."""
+    gen = widget._load_gen
+
+    def _apply():
+        if gen != widget._load_gen:
+            return False
+        widget._apply_pixbuf(pixbuf, url)
+        return False
+
+    GLib.idle_add(_apply)
+
+
 def cache_pixbuf(url, pixbuf):
     if not url or not pixbuf:
         return
@@ -837,6 +872,8 @@ class AsyncImage(Gtk.Image):
         # Remember the desktop size so set_compact() can restore it
         # when compact mode toggles off. Mirrors AsyncPicture.target_size.
         self._base_size = self.target_w
+        self._load_gen = 0
+        self.connect("destroy", _async_image_teardown)
 
         if url:
             self.load_url(url)
@@ -941,6 +978,7 @@ class AsyncImage(Gtk.Image):
         self._queue_fetch(self._fetch_image, url, fallbacks, None)
 
     def _fetch_image(self, url, fallbacks=None, cached_pixbuf=None):
+        gen = self._load_gen
         # Skip stale work: if the widget has moved on (fast scroll, re-bind to
         # a different track), don't spend cycles fetching/decoding for it.
         if self.url != url:
@@ -1043,11 +1081,11 @@ class AsyncImage(Gtk.Image):
                         except Exception as e:
                             print(f"Pixbuf crop error: {e}")
 
-                # Apply on main thread
-                GLib.idle_add(self._apply_pixbuf, final_pixbuf, url)
+                if gen == self._load_gen:
+                    _schedule_pixbuf_apply(self, final_pixbuf, url)
 
         except Exception:
-            if fallbacks and self.url == url:
+            if fallbacks and self.url == url and gen == self._load_gen:
                 next_url = fallbacks.pop(0)
                 self.url = next_url  # Update current URL to match the fallback
 
@@ -1143,6 +1181,8 @@ class AsyncPicture(Gtk.Picture):
         self.url = url
         self.video_id = None
         self._is_placeholder = True
+        self._load_gen = 0
+        self.connect("destroy", _async_image_teardown)
 
         # Constrain the picture widget to target_size so it doesn't
         # request more space when a non-square texture is loaded
@@ -1272,6 +1312,7 @@ class AsyncPicture(Gtk.Picture):
         self._queue_fetch(self._fetch_image, url, target_size, crop, fallbacks)
 
     def _fetch_image(self, url, target_size=None, crop=False, fallbacks=None):
+        gen = self._load_gen
         # Skip stale work: if the widget has moved on (fast scroll, re-bind to
         # a different track), don't spend cycles fetching/decoding for it.
         if self.url != url:
@@ -1283,7 +1324,8 @@ class AsyncPicture(Gtk.Picture):
             with IMG_CACHE_LOCK:
                 if url in IMG_CACHE:
                     IMG_CACHE.move_to_end(url)
-            GLib.idle_add(self._apply_pixbuf, cached_pixbuf, url)
+            if gen == self._load_gen:
+                _schedule_pixbuf_apply(self, cached_pixbuf, url)
             return
         try:
             if url.startswith("file://"):
@@ -1349,10 +1391,11 @@ class AsyncPicture(Gtk.Picture):
                             GdkPixbuf.InterpType.BILINEAR,
                         )
 
-            GLib.idle_add(self._apply_pixbuf, pixbuf, url)
+            if gen == self._load_gen:
+                _schedule_pixbuf_apply(self, pixbuf, url)
 
         except Exception:
-            if fallbacks and self.url == url:
+            if fallbacks and self.url == url and gen == self._load_gen:
                 next_url = fallbacks.pop(0)
                 self.url = next_url
                 self._fetch_image(next_url, target_size, crop, fallbacks)
@@ -1360,7 +1403,7 @@ class AsyncPicture(Gtk.Picture):
                 # Last resort: try local cover for downloaded songs
                 try:
                     local = self._get_local_cover()
-                    if local and local != url:
+                    if local and local != url and gen == self._load_gen:
                         self._fetch_image(local, target_size, crop, [])
                 except Exception:
                     pass

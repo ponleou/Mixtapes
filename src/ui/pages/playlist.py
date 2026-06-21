@@ -448,6 +448,40 @@ class PlaylistPage(Adw.Bin):
         self.current_limit = 200
         self.is_loading_more = False
         self.current_filter_text = ""
+        self._page_gen = 0
+        self.connect("destroy", self._on_page_destroy)
+
+    def _on_page_destroy(self, widget):
+        """Release track data and image textures when the nav page is popped.
+        Background fetch threads can outlive the visible page; without
+        invalidating their idle callbacks they repopulate the store and queue
+        hundreds of thumbnail decodes on a dead widget tree."""
+        self._page_gen += 1
+        self._track_populate_token = getattr(self, "_track_populate_token", 0) + 1
+        self.current_tracks = []
+        self.original_tracks = []
+        try:
+            self.track_store.remove_all()
+        except Exception:
+            pass
+        try:
+            self.cover_img.set_from_paintable(None)
+            self.cover_img.url = None
+        except Exception:
+            pass
+        dm = self.player.download_manager
+        if getattr(self, "_dl_queued_id", None):
+            try:
+                dm.disconnect(self._dl_queued_id)
+            except Exception:
+                pass
+            self._dl_queued_id = None
+        if getattr(self, "_dl_done_id", None):
+            try:
+                dm.disconnect(self._dl_done_id)
+            except Exception:
+                pass
+            self._dl_done_id = None
 
     # ── Factory callbacks ─────────────────────────────────────────────────────
 
@@ -1319,6 +1353,8 @@ class PlaylistPage(Adw.Bin):
         """Fires from MusicClient after the library cache populates async.
         Updates the saved-to-library flag and rebuilds the menu so the
         Save/Unsave entry reflects the now-known state."""
+        if not self.get_parent():
+            return False
         check_id = getattr(self, "_audio_playlist_id", None) or self.playlist_id
         if not check_id:
             return False
@@ -1479,8 +1515,10 @@ class PlaylistPage(Adw.Bin):
         self._schedule_details_fetch(playlist_id, delay=has_cached_content)
 
     def _schedule_details_fetch(self, playlist_id, delay=False):
+        page_gen = self._page_gen
+
         def start():
-            if self.playlist_id != playlist_id:
+            if page_gen != self._page_gen or self.playlist_id != playlist_id:
                 return False
             self.content_spinner.set_visible(True)
             thread = threading.Thread(
@@ -1514,6 +1552,7 @@ class PlaylistPage(Adw.Bin):
             return
 
         token = getattr(self, "_track_populate_token", 0)
+        page_gen = self._page_gen
 
         def worker():
             try:
@@ -1591,16 +1630,18 @@ class PlaylistPage(Adw.Bin):
                 # animation so the page doesn't look empty. The track splice
                 # follows right after — Gtk.ListView virtualizes, so only the
                 # visible rows get widget-allocated regardless of list size.
-                GLib.idle_add(self._apply_disk_cache_header, token, payload)
-                GLib.idle_add(self._apply_disk_cache_tracks, token, payload)
+                GLib.idle_add(self._apply_disk_cache_header, page_gen, token, payload)
+                GLib.idle_add(self._apply_disk_cache_tracks, page_gen, token, payload)
             except Exception as e:
                 print(f"[DISK-CACHE] optimistic render failed: {e}")
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _apply_disk_cache_header(self, token, payload):
+    def _apply_disk_cache_header(self, page_gen, token, payload):
         """Cheap header updates: title, description, meta strings, cover.
         Safe to run during the page-push animation."""
+        if page_gen != self._page_gen:
+            return False
         if token != getattr(self, "_track_populate_token", 0):
             return False
         try:
@@ -1655,7 +1696,7 @@ class PlaylistPage(Adw.Bin):
             print(f"[DISK-CACHE] header apply failed: {e}")
         return False
 
-    def _apply_disk_cache_tracks(self, token, payload):
+    def _apply_disk_cache_tracks(self, page_gen, token, payload):
         """Splice the prepared TrackItems into the store in two stages:
         a visible-batch first so the user sees rows immediately, then the
         long tail deferred to a separate idle so the heavy items-changed
@@ -1664,6 +1705,8 @@ class PlaylistPage(Adw.Bin):
         Worker has already done JSON parse + TrackItem construction; the
         main thread only owes the splice itself.
         """
+        if page_gen != self._page_gen:
+            return False
         if token != getattr(self, "_track_populate_token", 0):
             return False
         try:
@@ -1697,7 +1740,7 @@ class PlaylistPage(Adw.Bin):
                     # which was the exact "online stuttery, offline butter"
                     # asymmetry the user was seeing.
                     GLib.timeout_add(
-                        350, self._apply_disk_cache_tail, tail_token, tail,
+                        350, self._apply_disk_cache_tail, page_gen, tail_token, tail,
                     )
 
             self.empty_label.set_visible(not items)
@@ -1706,13 +1749,15 @@ class PlaylistPage(Adw.Bin):
             print(f"[DISK-CACHE] tracks apply failed: {e}")
         return False
 
-    def _apply_disk_cache_tail(self, token, tail):
+    def _apply_disk_cache_tail(self, page_gen, token, tail):
         # Splicing 800+ items into a ListStore in a single idle callback
         # pegged the main thread for ~150ms (py-spy: 439 main-thread samples
         # inside this function on an 850-track playlist), which the user
         # sees as a hard stutter right after the page opens. Splice in
         # smaller chunks with idle yields between so layout/paint can
         # interleave — total work is the same, but spread across frames.
+        if page_gen != self._page_gen:
+            return False
         if token != getattr(self, "_track_populate_token", 0):
             return False
         try:
@@ -1723,7 +1768,7 @@ class PlaylistPage(Adw.Bin):
             self.track_store.splice(self.track_store.get_n_items(), 0, head)
             if rest:
                 GLib.idle_add(
-                    self._apply_disk_cache_tail, token, rest,
+                    self._apply_disk_cache_tail, page_gen, token, rest,
                     priority=GLib.PRIORITY_LOW,
                 )
         except Exception as e:
@@ -1868,6 +1913,7 @@ class PlaylistPage(Adw.Bin):
     # ── Fetch ─────────────────────────────────────────────────────────────────
 
     def _fetch_playlist_details(self, playlist_id, is_incremental=False):
+        page_gen = self._page_gen
         try:
             # Virtual playlists (UPLOADS, DOWNLOADS, HISTORY) are populated
             # by LibraryPage and don't need further API fetching here.
@@ -2264,37 +2310,42 @@ class PlaylistPage(Adw.Bin):
                 meta2_parts.append(duration_str)
             meta2 = " • ".join(meta2_parts)
 
-            GObject.idle_add(
-                self.update_ui,
-                title,
-                description,
-                meta1,
-                meta2,
-                thumbnails,
-                tracks,
-                is_incremental,
-                track_count,
-                is_owned,
-            )
+            def _deliver_ui():
+                if page_gen != self._page_gen:
+                    return False
+                self.update_ui(
+                    title,
+                    description,
+                    meta1,
+                    meta2,
+                    thumbnails,
+                    tracks,
+                    is_incremental,
+                    track_count,
+                    is_owned,
+                )
+                if (
+                    not is_incremental
+                    and track_count is not None
+                    and len(tracks) < track_count
+                ):
+                    if not self.playlist_id.startswith(
+                        "MPRE"
+                    ) and not self.playlist_id.startswith("OLAK"):
+                        self._start_background_full_fetch(page_gen)
+                return False
+
+            GObject.idle_add(_deliver_ui)
 
             # Cache writes are owned exclusively by MusicClient (via
             # get_playlist_full). Keeping it single-source means there's
             # one place to reason about when the disk cache gets updated.
 
-            if (
-                not is_incremental
-                and track_count is not None
-                and len(tracks) < track_count
-            ):
-                if not self.playlist_id.startswith(
-                    "MPRE"
-                ) and not self.playlist_id.startswith("OLAK"):
-                    self._start_background_full_fetch()
-
         except Exception as e:
             print(f"Critical error fetching playlist: {e}")
             self.is_loading_more = False
-            GObject.idle_add(self.load_more_spinner.set_visible, False)
+            if page_gen == self._page_gen:
+                GObject.idle_add(self.load_more_spinner.set_visible, False)
 
     # ── Update UI ─────────────────────────────────────────────────────────────
 
@@ -2457,10 +2508,13 @@ class PlaylistPage(Adw.Bin):
 
     # ── Background fetch ──────────────────────────────────────────────────────
 
-    def _start_background_full_fetch(self):
+    def _start_background_full_fetch(self, page_gen=None):
+        if page_gen is not None and page_gen != self._page_gen:
+            return
         if getattr(self, "is_fully_fetched", False):
             return
         print(f"Starting background fetch for full playlist: {self.playlist_id}")
+        fetch_gen = self._page_gen
 
         def fetch_job():
             try:
@@ -2473,7 +2527,14 @@ class PlaylistPage(Adw.Bin):
                 if tracks:
                     print(f"Background fetch complete. Fetched {len(tracks)} tracks.")
                     self.client.set_cached_playlist_tracks(self.playlist_id, tracks)
-                    GObject.idle_add(self._on_background_fetch_complete, tracks)
+
+                    def _deliver():
+                        if fetch_gen != self._page_gen:
+                            return False
+                        self._on_background_fetch_complete(tracks)
+                        return False
+
+                    GObject.idle_add(_deliver)
             except Exception as e:
                 print(f"Error in background fetch: {e}")
 
